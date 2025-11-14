@@ -22,6 +22,19 @@ class DebugService(private val project: Project) {
     // 存储断点信息 (breakpointId -> BreakpointInfo)
     private val breakpoints = ConcurrentHashMap<String, BreakpointInfo>()
 
+    // 存储调试会话信息 (sessionId -> SessionInfo)
+    private val debugSessions = ConcurrentHashMap<String, DebugSessionInfo>()
+
+    /**
+     * 调试会话信息
+     */
+    private data class DebugSessionInfo(
+        val sessionId: String,
+        var status: String, // running, paused, stopped
+        val mainClass: String,
+        val filePath: String
+    )
+
     /**
      * 设置断点
      * @param request 断点设置请求
@@ -123,6 +136,430 @@ class DebugService(private val project: Project) {
                 success = true,
                 breakpointId = breakpointId,
                 message = "Breakpoint removed successfully"
+            )
+        }
+    }
+
+    // ========== Phase 3.2: 调试会话管理 ==========
+
+    /**
+     * 启动调试会话
+     * @param request 调试会话启动请求
+     * @return 调试会话响应
+     */
+    fun startDebugSession(request: DebugSessionRequest): DebugSessionResponse {
+        logger.info("Starting debug session for: ${request.mainClass}")
+
+        return ThreadHelper.runReadAction {
+            // 1. 验证文件存在
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
+                ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+
+            // 2. 生成会话ID
+            val sessionId = UUID.randomUUID().toString()
+
+            // 3. 创建会话信息
+            val sessionInfo = DebugSessionInfo(
+                sessionId = sessionId,
+                status = "running",
+                mainClass = request.mainClass,
+                filePath = request.filePath
+            )
+
+            // 4. 存储会话
+            debugSessions[sessionId] = sessionInfo
+
+            logger.warn("Debug session start - placeholder implementation")
+            logger.info("Session ID: $sessionId, Main class: ${request.mainClass}")
+
+            // 5. 返回响应
+            DebugSessionResponse(
+                success = true,
+                sessionId = sessionId,
+                status = "running",
+                breakpoints = breakpoints.values.toList()
+            )
+        }
+    }
+
+    /**
+     * 停止调试会话
+     * @param sessionId 会话ID
+     * @return 调试控制响应
+     */
+    fun stopDebugSession(sessionId: String): DebugControlResponse {
+        logger.info("Stopping debug session: $sessionId")
+
+        return ThreadHelper.runReadAction {
+            val session = debugSessions[sessionId]
+                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+
+            session.status = "stopped"
+            debugSessions.remove(sessionId)
+
+            logger.warn("Debug session stop - placeholder implementation")
+            logger.info("Session stopped: $sessionId")
+
+            DebugControlResponse(
+                success = true,
+                sessionId = sessionId,
+                status = "stopped",
+                currentLocation = null
+            )
+        }
+    }
+
+    /**
+     * 暂停调试会话
+     * @param sessionId 会话ID
+     * @return 调试控制响应
+     */
+    fun pauseDebugSession(sessionId: String): DebugControlResponse {
+        logger.info("Pausing debug session: $sessionId")
+
+        return ThreadHelper.runReadAction {
+            val session = debugSessions[sessionId]
+                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+
+            session.status = "paused"
+
+            logger.warn("Debug session pause - placeholder implementation")
+            logger.info("Session paused: $sessionId")
+
+            // 模拟当前位置
+            val mockLocation = CodeLocation(
+                filePath = session.filePath,
+                offset = 0,
+                line = 10,
+                column = 0
+            )
+
+            DebugControlResponse(
+                success = true,
+                sessionId = sessionId,
+                status = "paused",
+                currentLocation = mockLocation
+            )
+        }
+    }
+
+    /**
+     * 继续调试会话
+     * @param sessionId 会话ID
+     * @return 调试控制响应
+     */
+    fun resumeDebugSession(sessionId: String): DebugControlResponse {
+        logger.info("Resuming debug session: $sessionId")
+
+        return ThreadHelper.runReadAction {
+            val session = debugSessions[sessionId]
+                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+
+            session.status = "running"
+
+            logger.warn("Debug session resume - placeholder implementation")
+            logger.info("Session resumed: $sessionId")
+
+            DebugControlResponse(
+                success = true,
+                sessionId = sessionId,
+                status = "running",
+                currentLocation = null
+            )
+        }
+    }
+
+    /**
+     * 步过（Step Over）
+     * @param sessionId 会话ID
+     * @return 调试控制响应
+     */
+    fun stepOver(sessionId: String): DebugControlResponse {
+        logger.info("Step over in session: $sessionId")
+
+        return ThreadHelper.runReadAction {
+            val session = debugSessions[sessionId]
+                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+
+            session.status = "paused"
+
+            logger.warn("Debug step over - placeholder implementation")
+            logger.info("Stepped over in session: $sessionId")
+
+            // 模拟步进后的位置
+            val mockLocation = CodeLocation(
+                filePath = session.filePath,
+                offset = 0,
+                line = 11,
+                column = 0
+            )
+
+            DebugControlResponse(
+                success = true,
+                sessionId = sessionId,
+                status = "paused",
+                currentLocation = mockLocation
+            )
+        }
+    }
+
+    /**
+     * 步入（Step Into）
+     * @param sessionId 会话ID
+     * @return 调试控制响应
+     */
+    fun stepInto(sessionId: String): DebugControlResponse {
+        logger.info("Step into in session: $sessionId")
+
+        return ThreadHelper.runReadAction {
+            val session = debugSessions[sessionId]
+                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+
+            session.status = "paused"
+
+            logger.warn("Debug step into - placeholder implementation")
+            logger.info("Stepped into in session: $sessionId")
+
+            // 模拟步入后的位置
+            val mockLocation = CodeLocation(
+                filePath = session.filePath,
+                offset = 0,
+                line = 12,
+                column = 0
+            )
+
+            DebugControlResponse(
+                success = true,
+                sessionId = sessionId,
+                status = "paused",
+                currentLocation = mockLocation
+            )
+        }
+    }
+
+    /**
+     * 步出（Step Out）
+     * @param sessionId 会话ID
+     * @return 调试控制响应
+     */
+    fun stepOut(sessionId: String): DebugControlResponse {
+        logger.info("Step out in session: $sessionId")
+
+        return ThreadHelper.runReadAction {
+            val session = debugSessions[sessionId]
+                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+
+            session.status = "paused"
+
+            logger.warn("Debug step out - placeholder implementation")
+            logger.info("Stepped out in session: $sessionId")
+
+            // 模拟步出后的位置
+            val mockLocation = CodeLocation(
+                filePath = session.filePath,
+                offset = 0,
+                line = 13,
+                column = 0
+            )
+
+            DebugControlResponse(
+                success = true,
+                sessionId = sessionId,
+                status = "paused",
+                currentLocation = mockLocation
+            )
+        }
+    }
+
+    // ========== Phase 3.3: 表达式和变量 ==========
+
+    /**
+     * 计算表达式
+     * @param request 表达式求值请求
+     * @return 表达式求值响应
+     */
+    fun evaluateExpression(request: EvaluateExpressionRequest): EvaluateExpressionResponse {
+        logger.info("Evaluating expression in session: ${request.sessionId}")
+
+        return ThreadHelper.runReadAction {
+            val session = debugSessions[request.sessionId]
+                ?: throw IllegalArgumentException("Debug session not found: ${request.sessionId}")
+
+            if (session.status != "paused") {
+                throw IllegalStateException("Debug session must be paused to evaluate expressions")
+            }
+
+            logger.warn("Expression evaluation - placeholder implementation")
+            logger.info("Expression: ${request.expression}, Frame: ${request.frameIndex ?: 0}")
+
+            // 模拟求值结果
+            EvaluateExpressionResponse(
+                success = true,
+                value = "42",
+                type = "int",
+                error = null
+            )
+        }
+    }
+
+    /**
+     * 获取当前作用域变量
+     * @param request 获取变量请求
+     * @return 获取变量响应
+     */
+    fun getVariables(request: GetVariablesRequest): GetVariablesResponse {
+        logger.info("Getting variables in session: ${request.sessionId}")
+
+        return ThreadHelper.runReadAction {
+            val session = debugSessions[request.sessionId]
+                ?: throw IllegalArgumentException("Debug session not found: ${request.sessionId}")
+
+            if (session.status != "paused") {
+                throw IllegalStateException("Debug session must be paused to get variables")
+            }
+
+            logger.warn("Get variables - placeholder implementation")
+            logger.info("Scope: ${request.scope ?: "local"}, Frame: ${request.frameIndex ?: 0}")
+
+            // 模拟变量列表
+            val mockVariables = listOf(
+                VariableInfo(
+                    name = "count",
+                    value = "10",
+                    type = "int",
+                    scope = "local",
+                    children = null
+                ),
+                VariableInfo(
+                    name = "message",
+                    value = "\"Hello World\"",
+                    type = "String",
+                    scope = "local",
+                    children = null
+                ),
+                VariableInfo(
+                    name = "this",
+                    value = "MainClass@12345",
+                    type = "MainClass",
+                    scope = "instance",
+                    children = listOf(
+                        VariableInfo(
+                            name = "field1",
+                            value = "100",
+                            type = "int",
+                            scope = "instance",
+                            children = null
+                        )
+                    )
+                )
+            )
+
+            GetVariablesResponse(
+                success = true,
+                variables = mockVariables
+            )
+        }
+    }
+
+    /**
+     * 获取指定变量详情
+     * @param sessionId 会话ID
+     * @param variableName 变量名
+     * @return 变量信息
+     */
+    fun getVariable(sessionId: String, variableName: String): VariableInfo {
+        logger.info("Getting variable '$variableName' in session: $sessionId")
+
+        return ThreadHelper.runReadAction {
+            val session = debugSessions[sessionId]
+                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+
+            if (session.status != "paused") {
+                throw IllegalStateException("Debug session must be paused to get variable")
+            }
+
+            logger.warn("Get variable - placeholder implementation")
+            logger.info("Variable name: $variableName")
+
+            // 模拟变量详情
+            VariableInfo(
+                name = variableName,
+                value = "42",
+                type = "int",
+                scope = "local",
+                children = null
+            )
+        }
+    }
+
+    // ========== Phase 3.4: 调用栈 ==========
+
+    /**
+     * 获取调用栈
+     * @param request 调用栈请求
+     * @return 调用栈响应
+     */
+    fun getCallStack(request: GetCallStackRequest): GetCallStackResponse {
+        logger.info("Getting call stack for session: ${request.sessionId}")
+
+        return ThreadHelper.runReadAction {
+            val session = debugSessions[request.sessionId]
+                ?: throw IllegalArgumentException("Debug session not found: ${request.sessionId}")
+
+            if (session.status != "paused") {
+                throw IllegalStateException("Debug session must be paused to get call stack")
+            }
+
+            logger.warn("Get call stack - placeholder implementation")
+            logger.info("Session ID: ${request.sessionId}")
+
+            // 模拟调用栈
+            val mockFrames = listOf(
+                StackFrame(
+                    frameIndex = 0,
+                    methodName = "main",
+                    className = session.mainClass,
+                    location = CodeLocation(
+                        filePath = session.filePath,
+                        offset = 0,
+                        line = 10,
+                        column = 0
+                    ),
+                    variables = listOf(
+                        VariableInfo(
+                            name = "args",
+                            value = "String[0]",
+                            type = "String[]",
+                            scope = "local",
+                            children = null
+                        )
+                    )
+                ),
+                StackFrame(
+                    frameIndex = 1,
+                    methodName = "processData",
+                    className = session.mainClass,
+                    location = CodeLocation(
+                        filePath = session.filePath,
+                        offset = 0,
+                        line = 25,
+                        column = 0
+                    ),
+                    variables = listOf(
+                        VariableInfo(
+                            name = "data",
+                            value = "42",
+                            type = "int",
+                            scope = "local",
+                            children = null
+                        )
+                    )
+                )
+            )
+
+            GetCallStackResponse(
+                success = true,
+                frames = mockFrames
             )
         }
     }

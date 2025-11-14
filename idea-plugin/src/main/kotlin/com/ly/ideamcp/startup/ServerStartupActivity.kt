@@ -345,6 +345,207 @@ class ServerStartupActivity : StartupActivity {
             debugService.removeBreakpoint(breakpointId)
         }
 
+        // ========== Phase 3.2: 调试会话管理 API ==========
+
+        // 启动调试会话
+        router.post("/api/v1/debug/session/start") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val debugSessionRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.debug.DebugSessionRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.startDebugSession(debugSessionRequest)
+        }
+
+        // 停止调试会话
+        router.post("/api/v1/debug/session/stop") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            // 从请求体提取 sessionId
+            val requestHandler = RequestHandler(router)
+            val body = requestHandler.parseRequestBody(exchange, Map::class.java) as? Map<*, *>
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val sessionId = body["sessionId"] as? String
+                ?: throw IllegalArgumentException("Session ID is required")
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.stopDebugSession(sessionId)
+        }
+
+        // 暂停调试会话
+        router.post("/api/v1/debug/session/pause") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val body = requestHandler.parseRequestBody(exchange, Map::class.java) as? Map<*, *>
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val sessionId = body["sessionId"] as? String
+                ?: throw IllegalArgumentException("Session ID is required")
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.pauseDebugSession(sessionId)
+        }
+
+        // 继续调试会话
+        router.post("/api/v1/debug/session/resume") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val body = requestHandler.parseRequestBody(exchange, Map::class.java) as? Map<*, *>
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val sessionId = body["sessionId"] as? String
+                ?: throw IllegalArgumentException("Session ID is required")
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.resumeDebugSession(sessionId)
+        }
+
+        // 步过
+        router.post("/api/v1/debug/session/step-over") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val body = requestHandler.parseRequestBody(exchange, Map::class.java) as? Map<*, *>
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val sessionId = body["sessionId"] as? String
+                ?: throw IllegalArgumentException("Session ID is required")
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.stepOver(sessionId)
+        }
+
+        // 步入
+        router.post("/api/v1/debug/session/step-into") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val body = requestHandler.parseRequestBody(exchange, Map::class.java) as? Map<*, *>
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val sessionId = body["sessionId"] as? String
+                ?: throw IllegalArgumentException("Session ID is required")
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.stepInto(sessionId)
+        }
+
+        // 步出
+        router.post("/api/v1/debug/session/step-out") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val body = requestHandler.parseRequestBody(exchange, Map::class.java) as? Map<*, *>
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val sessionId = body["sessionId"] as? String
+                ?: throw IllegalArgumentException("Session ID is required")
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.stepOut(sessionId)
+        }
+
+        // ========== Phase 3.3: 表达式和变量 API ==========
+
+        // 计算表达式
+        router.post("/api/v1/debug/evaluate") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val evaluateRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.debug.EvaluateExpressionRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.evaluateExpression(evaluateRequest)
+        }
+
+        // 获取变量列表
+        router.get("/api/v1/debug/variables") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            // 从查询参数解析请求
+            val queryParams = exchange.queryParameters
+            val sessionId = queryParams["sessionId"]?.firstOrNull()
+                ?: throw IllegalArgumentException("Session ID is required")
+
+            val frameIndex = queryParams["frameIndex"]?.firstOrNull()?.toIntOrNull() ?: 0
+            val scope = queryParams["scope"]?.firstOrNull() ?: "local"
+
+            val getVariablesRequest = com.ly.ideamcp.model.debug.GetVariablesRequest(
+                sessionId = sessionId,
+                frameIndex = frameIndex,
+                scope = scope
+            )
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.getVariables(getVariablesRequest)
+        }
+
+        // 获取指定变量
+        router.get("/api/v1/debug/variable/{name}") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            // 从路径参数提取变量名
+            val path = exchange.requestPath
+            val variableName = path.substringAfterLast("/")
+
+            if (variableName.isBlank()) {
+                throw IllegalArgumentException("Variable name is required")
+            }
+
+            // 从查询参数获取 sessionId
+            val queryParams = exchange.queryParameters
+            val sessionId = queryParams["sessionId"]?.firstOrNull()
+                ?: throw IllegalArgumentException("Session ID is required")
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.getVariable(sessionId, variableName)
+        }
+
+        // ========== Phase 3.4: 调用栈 API ==========
+
+        // 获取调用栈
+        router.get("/api/v1/debug/call-stack") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            // 从查询参数获取 sessionId
+            val queryParams = exchange.queryParameters
+            val sessionId = queryParams["sessionId"]?.firstOrNull()
+                ?: throw IllegalArgumentException("Session ID is required")
+
+            val getCallStackRequest = com.ly.ideamcp.model.debug.GetCallStackRequest(sessionId = sessionId)
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.getCallStack(getCallStackRequest)
+        }
+
         return router
     }
 
