@@ -3,8 +3,12 @@ package com.ly.ideamcp.service
 import com.intellij.codeInspection.InspectionManager
 import com.intellij.codeInspection.ProblemDescriptor
 import com.intellij.codeInspection.ex.InspectionManagerEx
+import com.intellij.codeInsight.daemon.impl.DaemonCodeAnalyzerImpl
+import com.intellij.codeInsight.daemon.impl.HighlightInfo
+import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.editor.Document
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiFile
 import com.ly.ideamcp.model.CodeLocation
@@ -41,9 +45,8 @@ class AnalysisService(private val project: Project) {
                 val fileProblems = inspectFile(psiFile, request)
                 problems.addAll(fileProblems)
             } else {
-                // 检查整个项目（简化实现）
-                logger.warn("Project-wide inspection not fully implemented")
-                // TODO: 实现项目级别检查
+                // 检查整个项目（暂不支持）
+                logger.warn("Project-wide inspection is not supported yet. Please specify a file path.")
             }
 
             // 应用结果限制
@@ -69,15 +72,19 @@ class AnalysisService(private val project: Project) {
         val problems = mutableListOf<ProblemInfo>()
 
         try {
-            val inspectionManager = InspectionManager.getInstance(project) as? InspectionManagerEx
-                ?: return emptyList()
+            val document = PsiHelper.getDocument(psiFile) ?: return emptyList()
 
-            // 使用 IDEA 的高亮信息获取问题
-            // 简化实现：实际应该运行所有配置的检查
-            val document = PsiHelper.getDocument(psiFile)
+            // 使用 DaemonCodeAnalyzer 获取文件的所有高亮信息（包括错误、警告等）
+            val daemonCodeAnalyzer = DaemonCodeAnalyzerImpl.getInstance(project) as DaemonCodeAnalyzerImpl
+            val highlights = daemonCodeAnalyzer.getFileLevelHighlights(project, psiFile)
 
-            // 这里简化实现，实际需要运行完整的检查流程
-            // TODO: 使用 DaemonCodeAnalyzerImpl 或 InspectionEngine 运行检查
+            // 将高亮信息转换为 ProblemInfo
+            for (highlight in highlights) {
+                val problemInfo = createProblemInfoFromHighlight(highlight, psiFile, document, request)
+                if (problemInfo != null) {
+                    problems.add(problemInfo)
+                }
+            }
 
             logger.info("File inspection completed with ${problems.size} problems")
         } catch (e: Exception) {
@@ -85,6 +92,86 @@ class AnalysisService(private val project: Project) {
         }
 
         return problems
+    }
+
+    /**
+     * 从 HighlightInfo 创建 ProblemInfo
+     */
+    private fun createProblemInfoFromHighlight(
+        highlight: HighlightInfo,
+        psiFile: PsiFile,
+        document: Document,
+        request: InspectionRequest
+    ): ProblemInfo? {
+        try {
+            val severity = highlight.severity
+
+            // 根据请求的最小严重程度过滤
+            val severityName = mapSeverityToString(severity)
+            if (request.severity != null && !shouldIncludeSeverity(severityName, request.severity)) {
+                return null
+            }
+
+            // 获取问题位置
+            val startOffset = highlight.startOffset
+            val file = psiFile.virtualFile ?: return null
+            val location = OffsetHelper.createLocation(
+                PsiHelper.getRelativePath(project, file),
+                document,
+                startOffset
+            ) ?: return null
+
+            // 获取快速修复（如果需要）
+            val quickFixes = if (request.includeQuickFixes) {
+                highlight.quickFixActionRanges?.mapNotNull { range ->
+                    val action = range.first.action
+                    QuickFixInfo(
+                        name = action.text,
+                        familyName = action.familyName ?: action.text
+                    )
+                } ?: emptyList()
+            } else {
+                null
+            }
+
+            return ProblemInfo(
+                location = location,
+                severity = severityName,
+                message = highlight.description ?: "Unknown problem",
+                inspectionName = highlight.inspectionToolId ?: "Unknown",
+                quickFixes = quickFixes
+            )
+        } catch (e: Exception) {
+            logger.warn("Failed to create problem info from highlight", e)
+            return null
+        }
+    }
+
+    /**
+     * 将 HighlightSeverity 映射为字符串
+     */
+    private fun mapSeverityToString(severity: HighlightSeverity): String {
+        return when {
+            severity == HighlightSeverity.ERROR -> "ERROR"
+            severity == HighlightSeverity.WARNING -> "WARNING"
+            severity == HighlightSeverity.WEAK_WARNING -> "WEAK_WARNING"
+            severity == HighlightSeverity.INFORMATION -> "INFORMATION"
+            severity.name == "TYPO" -> "TYPO"
+            else -> severity.name
+        }
+    }
+
+    /**
+     * 判断是否应该包含指定严重程度的问题
+     * @param actualSeverity 实际严重程度
+     * @param minSeverity 最小严重程度
+     * @return 是否应该包含
+     */
+    private fun shouldIncludeSeverity(actualSeverity: String, minSeverity: String): Boolean {
+        val severityLevels = listOf("INFORMATION", "WEAK_WARNING", "WARNING", "ERROR")
+        val actualLevel = severityLevels.indexOf(actualSeverity).takeIf { it >= 0 } ?: 0
+        val minLevel = severityLevels.indexOf(minSeverity).takeIf { it >= 0 } ?: 0
+        return actualLevel >= minLevel
     }
 
     /**

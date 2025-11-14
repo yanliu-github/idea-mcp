@@ -1,7 +1,6 @@
 // build.gradle.kts (根项目)
 plugins {
     // 应用到所有子项目
-    id("java") apply false
     id("org.jetbrains.kotlin.jvm") version "1.9.21" apply false
     id("org.jetbrains.intellij") version "1.16.1" apply false
 }

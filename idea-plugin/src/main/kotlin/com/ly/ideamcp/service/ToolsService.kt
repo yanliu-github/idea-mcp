@@ -24,17 +24,31 @@ class ToolsService(private val project: Project) {
     fun formatCode(request: FormatCodeRequest): FormatCodeResponse {
         logger.info("Formatting code in file: ${request.filePath}")
 
-        return ThreadHelper.runReadAction {
-            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
-                ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+        try {
+            val psiFile = ThreadHelper.runReadAction {
+                PsiHelper.findPsiFile(project, request.filePath)
+                    ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+            }
 
-            // 占位实现 - 实际应使用 CodeStyleManager.reformat
-            logger.info("Code formatting not fully implemented - placeholder response")
+            // 使用 WriteAction 执行格式化操作
+            ThreadHelper.runWriteAction {
+                val codeStyleManager = com.intellij.psi.codeStyle.CodeStyleManager.getInstance(project)
+                codeStyleManager.reformat(psiFile)
+            }
 
-            FormatCodeResponse(
+            logger.info("Successfully formatted code in file: ${request.filePath}")
+
+            return FormatCodeResponse(
                 success = true,
                 filePath = request.filePath,
                 formatted = true
+            )
+        } catch (e: Exception) {
+            logger.error("Failed to format code in file: ${request.filePath}", e)
+            return FormatCodeResponse(
+                success = false,
+                filePath = request.filePath,
+                formatted = false
             )
         }
     }
@@ -47,19 +61,100 @@ class ToolsService(private val project: Project) {
     fun optimizeImports(request: OptimizeImportsRequest): OptimizeImportsResponse {
         logger.info("Optimizing imports in file: ${request.filePath}")
 
-        return ThreadHelper.runReadAction {
-            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
-                ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+        try {
+            val psiFile = ThreadHelper.runReadAction {
+                PsiHelper.findPsiFile(project, request.filePath)
+                    ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+            }
 
-            // 占位实现 - 实际应使用 JavaCodeStyleManager.optimizeImports
-            logger.info("Optimize imports not fully implemented - placeholder response")
+            // 获取优化前的导入语句
+            val importsBefore = ThreadHelper.runReadAction {
+                extractImportStatements(psiFile)
+            }
 
-            OptimizeImportsResponse(
+            // 使用 WriteAction 执行优化导入操作
+            ThreadHelper.runWriteAction {
+                when {
+                    psiFile is com.intellij.psi.PsiJavaFile -> {
+                        // Java 文件使用 JavaCodeStyleManager
+                        val javaCodeStyleManager = com.intellij.psi.codeStyle.JavaCodeStyleManager.getInstance(project)
+                        javaCodeStyleManager.optimizeImports(psiFile)
+                    }
+                    psiFile.language.id == "kotlin" -> {
+                        // Kotlin 文件使用 KotlinCodeStyleManager (如果可用)
+                        try {
+                            val kotlinStyleManager = Class.forName("org.jetbrains.kotlin.idea.core.formatter.KotlinCodeStyleManager")
+                                .getMethod("getInstance", com.intellij.openapi.project.Project::class.java)
+                                .invoke(null, project)
+
+                            kotlinStyleManager.javaClass
+                                .getMethod("optimizeImports", com.intellij.psi.PsiFile::class.java)
+                                .invoke(kotlinStyleManager, psiFile)
+                        } catch (e: Exception) {
+                            logger.warn("Kotlin code style manager not available, using generic approach", e)
+                            // 降级处理:仅使用基本的代码格式化
+                            val codeStyleManager = com.intellij.psi.codeStyle.CodeStyleManager.getInstance(project)
+                            codeStyleManager.reformat(psiFile)
+                        }
+                    }
+                    else -> {
+                        logger.warn("Optimize imports not fully supported for language: ${psiFile.language.id}")
+                        // 对于其他语言,仅执行基本格式化
+                        val codeStyleManager = com.intellij.psi.codeStyle.CodeStyleManager.getInstance(project)
+                        codeStyleManager.reformat(psiFile)
+                    }
+                }
+            }
+
+            // 获取优化后的导入语句
+            val importsAfter = ThreadHelper.runReadAction {
+                extractImportStatements(psiFile)
+            }
+
+            // 计算变化
+            val removedImports = importsBefore - importsAfter.toSet()
+            val addedImports = importsAfter - importsBefore.toSet()
+
+            logger.info("Successfully optimized imports in file: ${request.filePath}")
+
+            return OptimizeImportsResponse(
                 success = true,
+                filePath = request.filePath,
+                removedImports = removedImports.toList(),
+                addedImports = addedImports.toList()
+            )
+        } catch (e: Exception) {
+            logger.error("Failed to optimize imports in file: ${request.filePath}", e)
+            return OptimizeImportsResponse(
+                success = false,
                 filePath = request.filePath,
                 removedImports = emptyList(),
                 addedImports = emptyList()
             )
+        }
+    }
+
+    /**
+     * 提取文件中的导入语句
+     */
+    private fun extractImportStatements(psiFile: com.intellij.psi.PsiFile): Set<String> {
+        return when (psiFile) {
+            is com.intellij.psi.PsiJavaFile -> {
+                psiFile.importList?.importStatements?.map { it.text }?.toSet() ?: emptySet()
+            }
+            else -> {
+                // 对于其他语言,尝试查找 import 关键字
+                val imports = mutableSetOf<String>()
+                psiFile.accept(object : com.intellij.psi.PsiRecursiveElementVisitor() {
+                    override fun visitElement(element: com.intellij.psi.PsiElement) {
+                        if (element.text.trim().startsWith("import ")) {
+                            imports.add(element.text.trim())
+                        }
+                        super.visitElement(element)
+                    }
+                })
+                imports
+            }
         }
     }
 
@@ -69,21 +164,97 @@ class ToolsService(private val project: Project) {
      * @return 快速修复响应
      */
     fun applyQuickFix(request: QuickFixRequest): QuickFixResponse {
-        logger.info("Applying quick fix in file: ${request.filePath}")
+        logger.info("Applying quick fix '${request.fixId}' in file: ${request.filePath}")
 
-        return ThreadHelper.runReadAction {
-            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
-                ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+        try {
+            val psiFile = ThreadHelper.runReadAction {
+                PsiHelper.findPsiFile(project, request.filePath)
+                    ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+            }
 
-            // 占位实现 - 实际应使用 IntentionAction
-            logger.info("Apply quick fix not fully implemented - placeholder response")
+            // 确定要检查的位置
+            val offset = when {
+                request.offset != null -> request.offset
+                request.line != null -> {
+                    ThreadHelper.runReadAction {
+                        val document = com.intellij.psi.PsiDocumentManager.getInstance(project).getDocument(psiFile)
+                            ?: throw IllegalArgumentException("Cannot get document for file: ${request.filePath}")
 
-            QuickFixResponse(
-                success = true,
+                        val lineNumber = (request.line - 1).coerceAtLeast(0)
+                        if (lineNumber >= document.lineCount) {
+                            throw IllegalArgumentException("Line number out of bounds: ${request.line}")
+                        }
+
+                        val lineStart = document.getLineStartOffset(lineNumber)
+                        val column = request.column?.let { (it - 1).coerceAtLeast(0) } ?: 0
+                        lineStart + column
+                    }
+                }
+                else -> 0
+            }
+
+            // 查找并应用快速修复
+            val applied = ThreadHelper.runReadAction {
+                val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+                    .selectedTextEditor
+                    ?: createTemporaryEditor(psiFile)
+
+                // 获取指定位置的所有可用快速修复
+                val intentions = com.intellij.codeInsight.daemon.impl.ShowIntentionsPass
+                    .getActionsToShow(editor, psiFile, offset, false)
+
+                // 查找匹配的快速修复
+                val matchingIntention = intentions.firstOrNull { intention ->
+                    intention.action.text.contains(request.fixId, ignoreCase = true) ||
+                    intention.action.familyName.contains(request.fixId, ignoreCase = true) ||
+                    intention.action.javaClass.simpleName.contains(request.fixId, ignoreCase = true)
+                }
+
+                if (matchingIntention != null) {
+                    // 应用快速修复
+                    ThreadHelper.runWriteAction {
+                        matchingIntention.action.invoke(project, editor, psiFile)
+                    }
+                    true
+                } else {
+                    logger.warn("Quick fix '${request.fixId}' not found at offset $offset in file: ${request.filePath}")
+                    false
+                }
+            }
+
+            return if (applied) {
+                logger.info("Successfully applied quick fix '${request.fixId}' in file: ${request.filePath}")
+                QuickFixResponse(
+                    success = true,
+                    filePath = request.filePath,
+                    fixApplied = request.fixId
+                )
+            } else {
+                QuickFixResponse(
+                    success = false,
+                    filePath = request.filePath,
+                    fixApplied = ""
+                )
+            }
+        } catch (e: Exception) {
+            logger.error("Failed to apply quick fix '${request.fixId}' in file: ${request.filePath}", e)
+            return QuickFixResponse(
+                success = false,
                 filePath = request.filePath,
-                fixApplied = request.fixId
+                fixApplied = ""
             )
         }
+    }
+
+    /**
+     * 创建临时编辑器用于执行操作
+     */
+    private fun createTemporaryEditor(psiFile: com.intellij.psi.PsiFile): com.intellij.openapi.editor.Editor {
+        val document = com.intellij.psi.PsiDocumentManager.getInstance(project).getDocument(psiFile)
+            ?: throw IllegalStateException("Cannot create document for file: ${psiFile.virtualFile.path}")
+
+        return com.intellij.openapi.editor.EditorFactory.getInstance()
+            .createEditor(document, project)
     }
 
     /**
@@ -92,19 +263,103 @@ class ToolsService(private val project: Project) {
      * @return Intention 响应
      */
     fun applyIntention(request: IntentionRequest): IntentionResponse {
-        logger.info("Applying intention in file: ${request.filePath}")
+        logger.info("Applying intention '${request.intentionId}' in file: ${request.filePath}")
 
-        return ThreadHelper.runReadAction {
-            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
-                ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+        try {
+            val psiFile = ThreadHelper.runReadAction {
+                PsiHelper.findPsiFile(project, request.filePath)
+                    ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+            }
 
-            // 占位实现 - 实际应使用 IntentionAction
-            logger.info("Apply intention not fully implemented - placeholder response")
+            // 确定要检查的位置
+            val offset = when {
+                request.offset != null -> request.offset
+                request.line != null -> {
+                    ThreadHelper.runReadAction {
+                        val document = com.intellij.psi.PsiDocumentManager.getInstance(project).getDocument(psiFile)
+                            ?: throw IllegalArgumentException("Cannot get document for file: ${request.filePath}")
 
-            IntentionResponse(
-                success = true,
+                        val lineNumber = (request.line - 1).coerceAtLeast(0)
+                        if (lineNumber >= document.lineCount) {
+                            throw IllegalArgumentException("Line number out of bounds: ${request.line}")
+                        }
+
+                        val lineStart = document.getLineStartOffset(lineNumber)
+                        val column = request.column?.let { (it - 1).coerceAtLeast(0) } ?: 0
+                        lineStart + column
+                    }
+                }
+                else -> 0
+            }
+
+            // 查找并应用 Intention
+            val applied = ThreadHelper.runReadAction {
+                val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+                    .selectedTextEditor
+                    ?: createTemporaryEditor(psiFile)
+
+                // 移动光标到指定位置
+                editor.caretModel.moveToOffset(offset)
+
+                // 获取所有可用的 Intention Actions
+                val intentionManager = com.intellij.codeInsight.intention.IntentionManager.getInstance()
+                val availableIntentions = intentionManager.availableIntentions
+
+                // 查找匹配的 Intention
+                val matchingIntention = availableIntentions.firstOrNull { intention ->
+                    // 检查 Intention 是否在当前位置可用
+                    val isAvailable = try {
+                        intention.isAvailable(project, editor, psiFile)
+                    } catch (e: Exception) {
+                        logger.warn("Error checking intention availability: ${intention.text}", e)
+                        false
+                    }
+
+                    // 匹配 Intention ID
+                    isAvailable && (
+                        intention.text.contains(request.intentionId, ignoreCase = true) ||
+                        intention.familyName.contains(request.intentionId, ignoreCase = true) ||
+                        intention.javaClass.simpleName.contains(request.intentionId, ignoreCase = true)
+                    )
+                }
+
+                if (matchingIntention != null) {
+                    // 应用 Intention
+                    ThreadHelper.runWriteAction {
+                        try {
+                            matchingIntention.invoke(project, editor, psiFile)
+                        } catch (e: Exception) {
+                            logger.error("Error invoking intention: ${matchingIntention.text}", e)
+                            throw e
+                        }
+                    }
+                    true
+                } else {
+                    logger.warn("Intention '${request.intentionId}' not found or not available at offset $offset in file: ${request.filePath}")
+                    false
+                }
+            }
+
+            return if (applied) {
+                logger.info("Successfully applied intention '${request.intentionId}' in file: ${request.filePath}")
+                IntentionResponse(
+                    success = true,
+                    filePath = request.filePath,
+                    intentionApplied = request.intentionId
+                )
+            } else {
+                IntentionResponse(
+                    success = false,
+                    filePath = request.filePath,
+                    intentionApplied = ""
+                )
+            }
+        } catch (e: Exception) {
+            logger.error("Failed to apply intention '${request.intentionId}' in file: ${request.filePath}", e)
+            return IntentionResponse(
+                success = false,
                 filePath = request.filePath,
-                intentionApplied = request.intentionId
+                intentionApplied = ""
             )
         }
     }

@@ -3,9 +3,10 @@ package com.ly.ideamcp.service
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
-import com.intellij.psi.PsiElement
-import com.intellij.psi.PsiReference
-import com.intellij.psi.search.searches.ReferencesSearch
+import com.intellij.psi.*
+import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.search.searches.*
+import com.intellij.psi.util.PsiTreeUtil
 import com.ly.ideamcp.model.*
 import com.ly.ideamcp.model.navigation.*
 import com.ly.ideamcp.util.OffsetHelper
@@ -239,16 +240,84 @@ class NavigationService(private val project: Project) {
             val element = PsiHelper.findElementAtOffset(psiFile, offset)
                 ?: throw IllegalArgumentException("No element found at offset: $offset")
 
-            // 占位实现 - 实际应使用 TypeHierarchyBrowser
-            logger.info("Type hierarchy not fully implemented - placeholder response")
+            // 查找类元素（向上遍历 PSI 树）
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
+                ?: throw IllegalArgumentException("Not a class element")
+
+            val className = psiClass.name ?: "Unknown"
+
+            // 收集父类型（超类和接口）
+            val supertypes = mutableListOf<TypeInfo>()
+
+            // 添加超类
+            var currentClass: PsiClass? = psiClass
+            var depth = 0
+            while (depth < 10) { // 限制递归深度防止无限循环
+                currentClass = currentClass?.superClass
+                if (currentClass == null || currentClass.qualifiedName == "java.lang.Object") {
+                    break
+                }
+
+                val typeInfo = createTypeInfo(currentClass)
+                if (typeInfo != null) {
+                    supertypes.add(typeInfo)
+                }
+                depth++
+            }
+
+            // 添加直接实现的接口
+            psiClass.interfaces.forEach { iface ->
+                val typeInfo = createTypeInfo(iface)
+                if (typeInfo != null) {
+                    supertypes.add(typeInfo)
+                }
+            }
+
+            // 收集子类型（使用 ClassInheritorsSearch）
+            val subtypes = mutableListOf<TypeInfo>()
+            val searchScope = GlobalSearchScope.projectScope(project)
+            val inheritorsQuery = ClassInheritorsSearch.search(psiClass, searchScope, true)
+
+            inheritorsQuery.forEach { inheritor ->
+                val typeInfo = createTypeInfo(inheritor)
+                if (typeInfo != null) {
+                    subtypes.add(typeInfo)
+                }
+            }
+
+            logger.info("Type hierarchy for $className: ${supertypes.size} supertypes, ${subtypes.size} subtypes")
 
             TypeHierarchyResponse(
                 success = true,
-                className = "ExampleClass",
-                supertypes = emptyList(),
-                subtypes = emptyList()
+                className = className,
+                supertypes = supertypes,
+                subtypes = subtypes
             )
         }
+    }
+
+    /**
+     * 从 PsiClass 创建 TypeInfo
+     */
+    private fun createTypeInfo(psiClass: PsiClass): TypeInfo? {
+        val name = psiClass.name ?: return null
+        val qualifiedName = psiClass.qualifiedName ?: name
+
+        val containingFile = psiClass.containingFile?.virtualFile ?: return null
+        val document = PsiHelper.getDocument(psiClass.containingFile) ?: return null
+
+        val offset = psiClass.textRange.startOffset
+        val location = OffsetHelper.createLocation(
+            PsiHelper.getRelativePath(project, containingFile),
+            document,
+            offset
+        ) ?: return null
+
+        return TypeInfo(
+            name = name,
+            qualifiedName = qualifiedName,
+            location = location
+        )
     }
 
     /**
@@ -274,16 +343,112 @@ class NavigationService(private val project: Project) {
             val element = PsiHelper.findElementAtOffset(psiFile, offset)
                 ?: throw IllegalArgumentException("No element found at offset: $offset")
 
-            // 占位实现 - 实际应使用 CallHierarchyBrowser
-            logger.info("Call hierarchy not fully implemented - placeholder response")
+            // 查找方法元素（向上遍历 PSI 树）
+            val psiMethod = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java)
+                ?: throw IllegalArgumentException("Not a method element")
+
+            val methodName = psiMethod.name
+            val containingClass = psiMethod.containingClass
+
+            // 查找调用者（Callers）- 谁调用了这个方法
+            val callers = mutableListOf<CallInfo>()
+            val references = MethodReferencesSearch.search(psiMethod).findAll()
+
+            for (ref in references) {
+                try {
+                    val callInfo = createCallInfoFromReference(ref)
+                    if (callInfo != null) {
+                        callers.add(callInfo)
+                    }
+                } catch (e: Exception) {
+                    logger.warn("Failed to create call info from reference", e)
+                }
+            }
+
+            // 查找被调用者（Callees）- 这个方法调用了谁
+            val callees = mutableListOf<CallInfo>()
+            val methodBody = psiMethod.body
+
+            if (methodBody != null) {
+                // 收集方法体内所有的方法调用
+                val methodCalls = PsiTreeUtil.findChildrenOfType(methodBody, PsiMethodCallExpression::class.java)
+
+                for (call in methodCalls) {
+                    try {
+                        val resolvedMethod = call.resolveMethod()
+                        if (resolvedMethod != null) {
+                            val callInfo = createCallInfoFromMethod(resolvedMethod, call)
+                            if (callInfo != null) {
+                                callees.add(callInfo)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        logger.warn("Failed to create call info from method call", e)
+                    }
+                }
+            }
+
+            logger.info("Call hierarchy for $methodName: ${callers.size} callers, ${callees.size} callees")
 
             CallHierarchyResponse(
                 success = true,
-                methodName = "exampleMethod",
-                callers = emptyList(),
-                callees = emptyList()
+                methodName = methodName,
+                callers = callers,
+                callees = callees
             )
         }
+    }
+
+    /**
+     * 从引用创建 CallInfo（用于 callers）
+     */
+    private fun createCallInfoFromReference(ref: PsiReference): CallInfo? {
+        val refElement = ref.element
+        val containingMethod = PsiTreeUtil.getParentOfType(refElement, PsiMethod::class.java)
+            ?: return null
+
+        val methodName = containingMethod.name
+        val className = containingMethod.containingClass?.name ?: "Unknown"
+
+        val file = containingMethod.containingFile?.virtualFile ?: return null
+        val document = PsiHelper.getDocument(containingMethod.containingFile) ?: return null
+
+        val offset = containingMethod.textRange.startOffset
+        val location = OffsetHelper.createLocation(
+            PsiHelper.getRelativePath(project, file),
+            document,
+            offset
+        ) ?: return null
+
+        return CallInfo(
+            methodName = methodName,
+            className = className,
+            location = location
+        )
+    }
+
+    /**
+     * 从方法创建 CallInfo（用于 callees）
+     */
+    private fun createCallInfoFromMethod(method: PsiMethod, callSite: PsiMethodCallExpression): CallInfo? {
+        val methodName = method.name
+        val className = method.containingClass?.name ?: "Unknown"
+
+        val file = method.containingFile?.virtualFile ?: return null
+        val document = PsiHelper.getDocument(method.containingFile) ?: return null
+
+        val offset = method.textRange.startOffset
+        val location = OffsetHelper.createLocation(
+            PsiHelper.getRelativePath(project, file),
+            document,
+            offset
+        ) ?: return null
+
+        return CallInfo(
+            methodName = methodName,
+            className = className,
+            location = location
+        )
     }
 
     /**
@@ -309,16 +474,158 @@ class NavigationService(private val project: Project) {
             val element = PsiHelper.findElementAtOffset(psiFile, offset)
                 ?: throw IllegalArgumentException("No element found at offset: $offset")
 
-            // 占位实现 - 实际应使用 DefinitionsScopedSearch
-            logger.info("Find implementations not fully implemented - placeholder response")
+            val implementations = mutableListOf<ImplementationInfo>()
+            var elementName = getElementName(element)
+
+            // 尝试解析为类或方法
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
+            val psiMethod = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java)
+
+            when {
+                // 1. 如果是方法 - 查找重写该方法的所有实现
+                psiMethod != null -> {
+                    elementName = psiMethod.name
+                    val searchScope = GlobalSearchScope.projectScope(project)
+
+                    // 使用 OverridingMethodsSearch 查找所有重写方法
+                    val overridingMethods = OverridingMethodsSearch.search(psiMethod, searchScope, true)
+
+                    overridingMethods.forEach { overridingMethod ->
+                        val implInfo = createImplementationInfoFromMethod(overridingMethod)
+                        if (implInfo != null) {
+                            implementations.add(implInfo)
+                        }
+                    }
+                }
+
+                // 2. 如果是类/接口 - 查找所有实现类
+                psiClass != null -> {
+                    elementName = psiClass.name ?: "Unknown"
+                    val searchScope = GlobalSearchScope.projectScope(project)
+
+                    // 对于接口或抽象类，查找所有继承者
+                    if (psiClass.isInterface || psiClass.hasModifierProperty(PsiModifier.ABSTRACT)) {
+                        val inheritors = ClassInheritorsSearch.search(psiClass, searchScope, true)
+
+                        inheritors.forEach { inheritor ->
+                            // 仅包括具体类（非接口、非抽象类）
+                            if (!inheritor.isInterface && !inheritor.hasModifierProperty(PsiModifier.ABSTRACT)) {
+                                val implInfo = createImplementationInfoFromClass(inheritor)
+                                if (implInfo != null) {
+                                    implementations.add(implInfo)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 3. 其他元素 - 使用 DefinitionsScopedSearch 查找定义
+                else -> {
+                    val searchScope = GlobalSearchScope.projectScope(project)
+                    val definitions = DefinitionsScopedSearch.search(element, searchScope)
+
+                    definitions.forEach { definition ->
+                        val implInfo = createImplementationInfoFromElement(definition)
+                        if (implInfo != null) {
+                            implementations.add(implInfo)
+                        }
+                    }
+                }
+            }
+
+            logger.info("Found ${implementations.size} implementations for $elementName")
 
             FindImplementationsResponse(
                 success = true,
-                elementName = getElementName(element),
-                implementations = emptyList(),
-                totalImplementations = 0
+                elementName = elementName,
+                implementations = implementations,
+                totalImplementations = implementations.size
             )
         }
+    }
+
+    /**
+     * 从方法创建 ImplementationInfo
+     */
+    private fun createImplementationInfoFromMethod(method: PsiMethod): ImplementationInfo? {
+        val name = method.name
+        val containingClass = method.containingClass
+        val qualifiedName = if (containingClass != null) {
+            "${containingClass.qualifiedName}.$name"
+        } else {
+            name
+        }
+
+        val file = method.containingFile?.virtualFile ?: return null
+        val document = PsiHelper.getDocument(method.containingFile) ?: return null
+
+        val offset = method.textRange.startOffset
+        val location = OffsetHelper.createLocation(
+            PsiHelper.getRelativePath(project, file),
+            document,
+            offset
+        ) ?: return null
+
+        return ImplementationInfo(
+            name = name,
+            qualifiedName = qualifiedName,
+            location = location
+        )
+    }
+
+    /**
+     * 从类创建 ImplementationInfo
+     */
+    private fun createImplementationInfoFromClass(psiClass: PsiClass): ImplementationInfo? {
+        val name = psiClass.name ?: return null
+        val qualifiedName = psiClass.qualifiedName ?: name
+
+        val file = psiClass.containingFile?.virtualFile ?: return null
+        val document = PsiHelper.getDocument(psiClass.containingFile) ?: return null
+
+        val offset = psiClass.textRange.startOffset
+        val location = OffsetHelper.createLocation(
+            PsiHelper.getRelativePath(project, file),
+            document,
+            offset
+        ) ?: return null
+
+        return ImplementationInfo(
+            name = name,
+            qualifiedName = qualifiedName,
+            location = location
+        )
+    }
+
+    /**
+     * 从元素创建 ImplementationInfo
+     */
+    private fun createImplementationInfoFromElement(element: PsiElement): ImplementationInfo? {
+        val name = getElementName(element)
+        val qualifiedName = when (element) {
+            is PsiClass -> element.qualifiedName ?: name
+            is PsiMethod -> {
+                val className = element.containingClass?.qualifiedName ?: ""
+                "$className.${element.name}"
+            }
+            else -> name
+        }
+
+        val file = element.containingFile?.virtualFile ?: return null
+        val document = PsiHelper.getDocument(element.containingFile) ?: return null
+
+        val offset = element.textRange.startOffset
+        val location = OffsetHelper.createLocation(
+            PsiHelper.getRelativePath(project, file),
+            document,
+            offset
+        ) ?: return null
+
+        return ImplementationInfo(
+            name = name,
+            qualifiedName = qualifiedName,
+            location = location
+        )
     }
 
     companion object {
