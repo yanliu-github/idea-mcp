@@ -1,0 +1,129 @@
+<!-- idea-plugin/src/main/resources/META-INF/plugin.xml -->
+<idea-plugin>
+    <!-- 插件唯一 ID -->
+    <id>com.ly.ideamcp</id>
+
+    <!-- 插件名称 -->
+    <name>IDEA MCP Server</name>
+
+    <!-- 插件供应商 -->
+    <vendor email="support@example.com" url="https://github.com/your-org/idea-mcp">
+        ly
+    </vendor>
+
+    <!-- 插件描述 -->
+    <description><![CDATA[
+        <h2>IntelliJ IDEA MCP Server</h2>
+        <p>
+            Expose IntelliJ IDEA's powerful capabilities through MCP (Model Context Protocol),
+            enabling AI tools like Claude Code to perform precise refactoring, navigation,
+            and code analysis.
+        </p>
+
+        <h3>Features:</h3>
+        <ul>
+            <li><b>Refactoring</b>: Rename, Extract Method, Inline, etc.</li>
+            <li><b>Navigation</b>: Find Usages, Go to Definition, Call Hierarchy</li>
+            <li><b>Code Analysis</b>: Inspections, Error Detection, Dependency Analysis</li>
+            <li><b>Debugging</b>: Breakpoint Management, Expression Evaluation</li>
+            <li><b>Code Generation</b>: Getters/Setters, Constructors, Tests</li>
+        </ul>
+
+        <h3>Usage:</h3>
+        <p>
+            The plugin starts an HTTP server (default port: 58888) on IDEA startup.
+            Connect your MCP server to this endpoint to enable AI-powered development.
+        </p>
+    ]]></description>
+
+    <!-- 变更日志 -->
+    <change-notes><![CDATA[
+        <h3>Version 1.0.0</h3>
+        <ul>
+            <li>Initial release</li>
+            <li>Support for basic refactoring operations</li>
+            <li>Code navigation features</li>
+            <li>Code analysis and inspections</li>
+        </ul>
+    ]]></change-notes>
+
+    <!-- 依赖的平台和插件 -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+
+    <!-- 可选依赖 (如果安装了才启用相关功能) -->
+    <!-- <depends optional="true" config-file="kotlin-support.xml">org.jetbrains.kotlin</depends> -->
+
+    <!-- 兼容的 IDEA 版本 -->
+    <idea-version since-build="241" until-build="243.*"/>
+
+    <!-- 扩展点和监听器 -->
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- 应用级别的服务 (单例) -->
+        <applicationService
+            serviceImplementation="com.ly.ideamcp.config.PluginSettings"/>
+
+        <!-- 项目级别的服务 -->
+        <projectService
+            serviceImplementation="com.ly.ideamcp.service.RefactoringService"/>
+        <projectService
+            serviceImplementation="com.ly.ideamcp.service.NavigationService"/>
+        <projectService
+            serviceImplementation="com.ly.ideamcp.service.AnalysisService"/>
+
+        <!-- 项目打开监听器 -->
+        <postStartupActivity
+            implementation="com.ly.ideamcp.startup.ServerStartupActivity"/>
+
+        <!-- 配置界面 -->
+        <applicationConfigurable
+            parentId="tools"
+            instance="com.ly.ideamcp.ui.PluginConfigurable"
+            id="com.ly.ideamcp.settings"
+            displayName="IDEA MCP Server"/>
+    </extensions>
+
+    <!-- Actions -->
+    <actions>
+        <!-- Tools 菜单 -->
+        <group id="IdeaMcp.ToolsMenu" text="IDEA MCP" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+
+            <action id="IdeaMcp.StartServer"
+                    class="com.ly.ideamcp.action.StartServerAction"
+                    text="Start MCP Server"
+                    description="Start the MCP HTTP server">
+                <keyboard-shortcut first-keystroke="control alt M" keymap="$default"/>
+            </action>
+
+            <action id="IdeaMcp.StopServer"
+                    class="com.ly.ideamcp.action.StopServerAction"
+                    text="Stop MCP Server"
+                    description="Stop the MCP HTTP server"/>
+
+            <action id="IdeaMcp.RestartServer"
+                    class="com.ly.ideamcp.action.RestartServerAction"
+                    text="Restart MCP Server"
+                    description="Restart the MCP HTTP server"/>
+
+            <separator/>
+
+            <action id="IdeaMcp.ViewStatus"
+                    class="com.ly.ideamcp.action.ViewStatusAction"
+                    text="View Server Status"
+                    description="View MCP server status"/>
+        </group>
+
+        <!-- 右键菜单 (Editor Popup) -->
+        <!-- <group id="IdeaMcp.EditorPopup" text="IDEA MCP" popup="true">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </group> -->
+    </actions>
+
+    <!-- 应用组件 (deprecated, 使用 postStartupActivity 代替) -->
+    <!-- <application-components>
+        <component>
+            <implementation-class>com.ly.ideamcp.IdeaMcpPlugin</implementation-class>
+        </component>
+    </application-components> -->
+</idea-plugin>

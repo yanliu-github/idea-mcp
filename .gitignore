@@ -1,0 +1,94 @@
+# ----- IntelliJ IDEA -----
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# ----- Gradle -----
+.gradle/
+build/
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+.gradletasknamecache
+
+# ----- IDEA Plugin Sandbox -----
+idea-plugin/build/
+idea-plugin/.gradle/
+
+# ----- Node.js / MCP Server -----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+mcp-server/dist/
+mcp-server/node_modules/
+
+# ----- OS -----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ----- 编辑器 -----
+*.swp
+*.swo
+*~
+.vscode/
+.fleet/
+
+# ----- 编译输出 -----
+*.class
+*.log
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ----- 依赖和包 -----
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# ----- 临时文件 -----
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*~.nib
+
+# ----- 测试输出 -----
+test-output/
+test-results/
+coverage/
+*.coverage
+.nyc_output/
+
+# ----- 敏感信息 -----
+.env
+.env.local
+.env.*.local
+secrets/
+credentials/
+
+# ----- 文档构建产物 -----
+docs/_build/
+site/
+
+# ----- 其他 -----
+.cache/
+.eslintcache
+.npm/
+.pnp.*
+.yarn/
