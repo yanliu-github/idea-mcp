@@ -113,15 +113,67 @@ class ServerStartupActivity : StartupActivity {
             )
         }
 
-        // ========== 重构 API（占位符，后续实现）==========
-        // router.post("/api/v1/refactor/rename") { exchange, project -> /* TODO */ }
+        // ========== 重构 API ==========
 
-        // ========== 导航 API（占位符，后续实现）==========
-        // router.post("/api/v1/navigation/find-usages") { exchange, project -> /* TODO */ }
-        // router.post("/api/v1/navigation/goto-definition") { exchange, project -> /* TODO */ }
+        // 重命名符号
+        router.post("/api/v1/refactor/rename") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
 
-        // ========== 分析 API（占位符，后续实现）==========
-        // router.post("/api/v1/analysis/inspections") { exchange, project -> /* TODO */ }
+            val requestHandler = RequestHandler(router)
+            val renameRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.refactor.RenameRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val refactoringService = com.ly.ideamcp.service.RefactoringService.getInstance(project)
+            refactoringService.renameSymbol(renameRequest)
+        }
+
+        // ========== 导航 API ==========
+
+        // 查找用途
+        router.post("/api/v1/navigation/find-usages") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val findUsagesRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.navigation.FindUsagesRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val navigationService = com.ly.ideamcp.service.NavigationService.getInstance(project)
+            navigationService.findUsages(findUsagesRequest)
+        }
+
+        // 跳转到定义
+        router.post("/api/v1/navigation/goto-definition") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val gotoDefinitionRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.navigation.GotoDefinitionRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val navigationService = com.ly.ideamcp.service.NavigationService.getInstance(project)
+            navigationService.gotoDefinition(gotoDefinitionRequest)
+        }
+
+        // ========== 分析 API ==========
+
+        // 运行代码检查
+        router.post("/api/v1/analysis/inspections") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val inspectionRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.analysis.InspectionRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val analysisService = com.ly.ideamcp.service.AnalysisService.getInstance(project)
+            analysisService.runInspections(inspectionRequest)
+        }
 
         return router
     }
