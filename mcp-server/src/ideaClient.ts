@@ -63,6 +63,23 @@ export class IdeaClient {
   }
 
   /**
+   * 发送 DELETE 请求到 IDEA Plugin
+   */
+  async delete<T = any>(endpoint: string): Promise<T> {
+    try {
+      console.error(`[DEBUG] DELETE ${endpoint}`);
+
+      const response = await this.client.delete<T>(endpoint);
+
+      console.error(`[DEBUG] Response:`, JSON.stringify(response.data, null, 2));
+      return response.data;
+    } catch (error) {
+      console.error(`[ERROR] DELETE ${endpoint} failed:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * 健康检查
    * @returns 健康检查响应
    */

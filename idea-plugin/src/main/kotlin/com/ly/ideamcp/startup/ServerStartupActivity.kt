@@ -301,6 +301,50 @@ class ServerStartupActivity : StartupActivity {
             analysisService.runInspections(inspectionRequest)
         }
 
+        // ========== 调试 API ==========
+
+        // 设置断点
+        router.post("/api/v1/debug/breakpoint") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val breakpointRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.debug.BreakpointRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.setBreakpoint(breakpointRequest)
+        }
+
+        // 列出所有断点
+        router.get("/api/v1/debug/breakpoints") { _, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.listBreakpoints()
+        }
+
+        // 删除断点
+        router.delete("/api/v1/debug/breakpoint/{id}") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            // 从路径参数提取断点ID
+            val path = exchange.requestPath
+            val breakpointId = path.substringAfterLast("/")
+
+            if (breakpointId.isBlank()) {
+                throw IllegalArgumentException("Breakpoint ID is required")
+            }
+
+            val debugService = com.ly.ideamcp.service.DebugService.getInstance(project)
+            debugService.removeBreakpoint(breakpointId)
+        }
+
         return router
     }
 

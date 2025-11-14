@@ -10,6 +10,7 @@ import { IdeaClient } from './ideaClient.js';
 import { RefactoringTools } from './tools/refactoring.js';
 import { NavigationTools } from './tools/navigation.js';
 import { AnalysisTools } from './tools/analysis.js';
+import { DebugTools } from './tools/debug.js';
 
 /**
  * IDEA MCP Server
@@ -41,6 +42,7 @@ const ideaClient = new IdeaClient(ideaPluginUrl);
 const refactoringTools = new RefactoringTools(ideaClient);
 const navigationTools = new NavigationTools(ideaClient);
 const analysisTools = new AnalysisTools(ideaClient);
+const debugTools = new DebugTools(ideaClient);
 
 // 处理 tools/list 请求
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -50,6 +52,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     ...refactoringTools.getTools(),
     ...navigationTools.getTools(),
     ...analysisTools.getTools(),
+    ...debugTools.getTools(),
   ];
 
   console.error(`[INFO] Returning ${tools.length} tools`);
@@ -72,6 +75,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       result = await navigationTools.execute(name, args);
     } else if (name.startsWith('analyze_')) {
       result = await analysisTools.execute(name, args);
+    } else if (name.startsWith('debug_')) {
+      result = await debugTools.execute(name, args);
     } else {
       console.error(`[ERROR] Unknown tool: ${name}`);
       throw new Error(`Unknown tool: ${name}`);
