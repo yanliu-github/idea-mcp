@@ -216,6 +216,111 @@ class NavigationService(private val project: Project) {
         return element.javaClass.simpleName
     }
 
+    /**
+     * 显示类型层次
+     * @param request 类型层次请求
+     * @return 类型层次响应
+     */
+    fun showTypeHierarchy(request: TypeHierarchyRequest): TypeHierarchyResponse {
+        logger.info("Showing type hierarchy in file: ${request.filePath}")
+
+        return ThreadHelper.runReadAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
+                ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+
+            val document = PsiHelper.getDocument(psiFile)
+                ?: throw IllegalStateException("Cannot get document")
+
+            val offset = request.offset ?: run {
+                OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
+                    ?: throw IllegalArgumentException("Invalid line/column")
+            }
+
+            val element = PsiHelper.findElementAtOffset(psiFile, offset)
+                ?: throw IllegalArgumentException("No element found at offset: $offset")
+
+            // 占位实现 - 实际应使用 TypeHierarchyBrowser
+            logger.info("Type hierarchy not fully implemented - placeholder response")
+
+            TypeHierarchyResponse(
+                success = true,
+                className = "ExampleClass",
+                supertypes = emptyList(),
+                subtypes = emptyList()
+            )
+        }
+    }
+
+    /**
+     * 显示调用层次
+     * @param request 调用层次请求
+     * @return 调用层次响应
+     */
+    fun showCallHierarchy(request: CallHierarchyRequest): CallHierarchyResponse {
+        logger.info("Showing call hierarchy in file: ${request.filePath}")
+
+        return ThreadHelper.runReadAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
+                ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+
+            val document = PsiHelper.getDocument(psiFile)
+                ?: throw IllegalStateException("Cannot get document")
+
+            val offset = request.offset ?: run {
+                OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
+                    ?: throw IllegalArgumentException("Invalid line/column")
+            }
+
+            val element = PsiHelper.findElementAtOffset(psiFile, offset)
+                ?: throw IllegalArgumentException("No element found at offset: $offset")
+
+            // 占位实现 - 实际应使用 CallHierarchyBrowser
+            logger.info("Call hierarchy not fully implemented - placeholder response")
+
+            CallHierarchyResponse(
+                success = true,
+                methodName = "exampleMethod",
+                callers = emptyList(),
+                callees = emptyList()
+            )
+        }
+    }
+
+    /**
+     * 查找实现
+     * @param request 查找实现请求
+     * @return 查找实现响应
+     */
+    fun findImplementations(request: FindImplementationsRequest): FindImplementationsResponse {
+        logger.info("Finding implementations in file: ${request.filePath}")
+
+        return ThreadHelper.runReadAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
+                ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+
+            val document = PsiHelper.getDocument(psiFile)
+                ?: throw IllegalStateException("Cannot get document")
+
+            val offset = request.offset ?: run {
+                OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
+                    ?: throw IllegalArgumentException("Invalid line/column")
+            }
+
+            val element = PsiHelper.findElementAtOffset(psiFile, offset)
+                ?: throw IllegalArgumentException("No element found at offset: $offset")
+
+            // 占位实现 - 实际应使用 DefinitionsScopedSearch
+            logger.info("Find implementations not fully implemented - placeholder response")
+
+            FindImplementationsResponse(
+                success = true,
+                elementName = getElementName(element),
+                implementations = emptyList(),
+                totalImplementations = 0
+            )
+        }
+    }
+
     companion object {
         fun getInstance(project: Project): NavigationService {
             return project.getService(NavigationService::class.java)

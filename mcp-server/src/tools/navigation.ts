@@ -80,6 +80,48 @@ export class NavigationTools {
           required: ['filePath'],
         },
       },
+      {
+        name: 'navigate_type_hierarchy',
+        description: '显示类型层次结构,包括父类和子类',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: '文件路径(项目相对路径)' },
+            offset: { type: 'number', description: '类位置偏移量' },
+            line: { type: 'number', description: '类所在行号(与offset二选一)' },
+            column: { type: 'number', description: '类所在列号' },
+          },
+          required: ['filePath'],
+        },
+      },
+      {
+        name: 'navigate_call_hierarchy',
+        description: '显示方法调用层次,包括调用者和被调用者',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: '文件路径(项目相对路径)' },
+            offset: { type: 'number', description: '方法位置偏移量' },
+            line: { type: 'number', description: '方法所在行号(与offset二选一)' },
+            column: { type: 'number', description: '方法所在列号' },
+          },
+          required: ['filePath'],
+        },
+      },
+      {
+        name: 'navigate_find_implementations',
+        description: '查找接口或抽象方法的所有实现',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string', description: '文件路径(项目相对路径)' },
+            offset: { type: 'number', description: '元素位置偏移量' },
+            line: { type: 'number', description: '元素所在行号(与offset二选一)' },
+            column: { type: 'number', description: '元素所在列号' },
+          },
+          required: ['filePath'],
+        },
+      },
     ];
   }
 
@@ -95,9 +137,39 @@ export class NavigationTools {
         return this.findUsages(args);
       case 'navigate_goto_definition':
         return this.gotoDefinition(args);
+      case 'navigate_type_hierarchy':
+        return this.typeHierarchy(args);
+      case 'navigate_call_hierarchy':
+        return this.callHierarchy(args);
+      case 'navigate_find_implementations':
+        return this.findImplementations(args);
       default:
         throw new Error(`Unknown navigation tool: ${toolName}`);
     }
+  }
+
+  /**
+   * 类型层次
+   */
+  private async typeHierarchy(args: any) {
+    const response = await this.ideaClient.post('/api/v1/navigation/type-hierarchy', args);
+    return response;
+  }
+
+  /**
+   * 调用层次
+   */
+  private async callHierarchy(args: any) {
+    const response = await this.ideaClient.post('/api/v1/navigation/call-hierarchy', args);
+    return response;
+  }
+
+  /**
+   * 查找实现
+   */
+  private async findImplementations(args: any) {
+    const response = await this.ideaClient.post('/api/v1/navigation/find-implementations', args);
+    return response;
   }
 
   /**

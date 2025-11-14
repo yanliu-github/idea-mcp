@@ -11,6 +11,12 @@ import { RefactoringTools } from './tools/refactoring.js';
 import { NavigationTools } from './tools/navigation.js';
 import { AnalysisTools } from './tools/analysis.js';
 import { DebugTools } from './tools/debug.js';
+import { CodegenTools } from './tools/codegen.js';
+import { SearchTools } from './tools/search.js';
+import { DependencyTools } from './tools/dependency.js';
+import { VcsTools } from './tools/vcs.js';
+import { ProjectTools } from './tools/project.js';
+import { ToolsTools } from './tools/tools.js';
 
 /**
  * IDEA MCP Server
@@ -43,6 +49,12 @@ const refactoringTools = new RefactoringTools(ideaClient);
 const navigationTools = new NavigationTools(ideaClient);
 const analysisTools = new AnalysisTools(ideaClient);
 const debugTools = new DebugTools(ideaClient);
+const codegenTools = new CodegenTools(ideaClient);
+const searchTools = new SearchTools(ideaClient);
+const dependencyTools = new DependencyTools(ideaClient);
+const vcsTools = new VcsTools(ideaClient);
+const projectTools = new ProjectTools(ideaClient);
+const toolsTools = new ToolsTools(ideaClient);
 
 // 处理 tools/list 请求
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -53,6 +65,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     ...navigationTools.getTools(),
     ...analysisTools.getTools(),
     ...debugTools.getTools(),
+    ...codegenTools.getTools(),
+    ...searchTools.getTools(),
+    ...dependencyTools.getTools(),
+    ...vcsTools.getTools(),
+    ...projectTools.getTools(),
+    ...toolsTools.getTools(),
   ];
 
   console.error(`[INFO] Returning ${tools.length} tools`);
@@ -77,6 +95,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       result = await analysisTools.execute(name, args);
     } else if (name.startsWith('debug_')) {
       result = await debugTools.execute(name, args);
+    } else if (name.startsWith('codegen_')) {
+      result = await codegenTools.execute(name, args);
+    } else if (name.startsWith('search_')) {
+      result = await searchTools.execute(name, args);
+    } else if (name.startsWith('vcs_')) {
+      result = await vcsTools.execute(name, args);
+    } else if (name.startsWith('project_')) {
+      result = await projectTools.execute(name, args);
+    } else if (name.startsWith('tools_')) {
+      result = await toolsTools.execute(name, args);
     } else {
       console.error(`[ERROR] Unknown tool: ${name}`);
       throw new Error(`Unknown tool: ${name}`);

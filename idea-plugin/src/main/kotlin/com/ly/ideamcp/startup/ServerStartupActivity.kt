@@ -546,6 +546,364 @@ class ServerStartupActivity : StartupActivity {
             debugService.getCallStack(getCallStackRequest)
         }
 
+        // ========== Phase 4.1: 代码生成 API ==========
+
+        // 生成 Getter/Setter
+        router.post("/api/v1/codegen/getters-setters") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.codegen.GenerateGettersSettersRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val codegenService = com.ly.ideamcp.service.CodeGenerationService.getInstance(project)
+            codegenService.generateGettersSetters(request)
+        }
+
+        // 生成构造函数
+        router.post("/api/v1/codegen/constructor") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.codegen.GenerateConstructorRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val codegenService = com.ly.ideamcp.service.CodeGenerationService.getInstance(project)
+            codegenService.generateConstructor(request)
+        }
+
+        // 生成 toString
+        router.post("/api/v1/codegen/tostring") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.codegen.GenerateMethodRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val codegenService = com.ly.ideamcp.service.CodeGenerationService.getInstance(project)
+            codegenService.generateToString(request)
+        }
+
+        // 生成 equals
+        router.post("/api/v1/codegen/equals") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.codegen.GenerateMethodRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val codegenService = com.ly.ideamcp.service.CodeGenerationService.getInstance(project)
+            codegenService.generateEquals(request)
+        }
+
+        // 生成 hashCode
+        router.post("/api/v1/codegen/hashcode") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.codegen.GenerateMethodRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val codegenService = com.ly.ideamcp.service.CodeGenerationService.getInstance(project)
+            codegenService.generateHashCode(request)
+        }
+
+        // 重写方法
+        router.post("/api/v1/codegen/override-method") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.codegen.OverrideMethodRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val codegenService = com.ly.ideamcp.service.CodeGenerationService.getInstance(project)
+            codegenService.overrideMethod(request)
+        }
+
+        // ========== Phase 4.2: 搜索 API ==========
+
+        // 全局搜索
+        router.post("/api/v1/search/global") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.search.GlobalSearchRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val searchService = com.ly.ideamcp.service.SearchService.getInstance(project)
+            searchService.globalSearch(request)
+        }
+
+        // 文本搜索
+        router.post("/api/v1/search/text") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.search.TextSearchRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val searchService = com.ly.ideamcp.service.SearchService.getInstance(project)
+            searchService.textSearch(request)
+        }
+
+        // 结构化搜索
+        router.post("/api/v1/search/structural") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.search.StructuralSearchRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val searchService = com.ly.ideamcp.service.SearchService.getInstance(project)
+            searchService.structuralSearch(request)
+        }
+
+        // ========== Phase 4.3: 导航增强 API ==========
+
+        // 类型层次
+        router.post("/api/v1/navigation/type-hierarchy") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.navigation.TypeHierarchyRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val navigationService = com.ly.ideamcp.service.NavigationService.getInstance(project)
+            navigationService.showTypeHierarchy(request)
+        }
+
+        // 调用层次
+        router.post("/api/v1/navigation/call-hierarchy") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.navigation.CallHierarchyRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val navigationService = com.ly.ideamcp.service.NavigationService.getInstance(project)
+            navigationService.showCallHierarchy(request)
+        }
+
+        // 查找实现
+        router.post("/api/v1/navigation/find-implementations") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.navigation.FindImplementationsRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val navigationService = com.ly.ideamcp.service.NavigationService.getInstance(project)
+            navigationService.findImplementations(request)
+        }
+
+        // ========== Phase 4.4: 依赖分析 API ==========
+
+        // 分析依赖
+        router.post("/api/v1/analysis/dependencies") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.dependency.AnalyzeDependenciesRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val dependencyService = com.ly.ideamcp.service.DependencyService.getInstance(project)
+            dependencyService.analyzeDependencies(request)
+        }
+
+        // 检测循环依赖
+        router.post("/api/v1/analysis/dependency-cycles") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.dependency.DetectCyclesRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val dependencyService = com.ly.ideamcp.service.DependencyService.getInstance(project)
+            dependencyService.detectCycles(request)
+        }
+
+        // ========== Phase 4.5: 版本控制 API ==========
+
+        // 获取 VCS 状态
+        router.get("/api/v1/vcs/status") { _, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val vcsService = com.ly.ideamcp.service.VcsService.getInstance(project)
+            vcsService.getStatus()
+        }
+
+        // 获取文件历史
+        router.post("/api/v1/vcs/history") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.vcs.VcsHistoryRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val vcsService = com.ly.ideamcp.service.VcsService.getInstance(project)
+            vcsService.getHistory(request)
+        }
+
+        // 获取文件差异
+        router.post("/api/v1/vcs/diff") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.vcs.VcsDiffRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val vcsService = com.ly.ideamcp.service.VcsService.getInstance(project)
+            vcsService.getDiff(request)
+        }
+
+        // 获取文件 blame
+        router.post("/api/v1/vcs/blame") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.vcs.VcsBlameRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val vcsService = com.ly.ideamcp.service.VcsService.getInstance(project)
+            vcsService.blame(request)
+        }
+
+        // ========== Phase 4.6: 项目管理 API ==========
+
+        // 获取项目结构
+        router.get("/api/v1/project/structure") { _, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val projectService = com.ly.ideamcp.service.ProjectService.getInstance(project)
+            projectService.getStructure()
+        }
+
+        // 获取模块列表
+        router.get("/api/v1/project/modules") { _, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val projectService = com.ly.ideamcp.service.ProjectService.getInstance(project)
+            projectService.getModules()
+        }
+
+        // 获取库列表
+        router.get("/api/v1/project/libraries") { _, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val projectService = com.ly.ideamcp.service.ProjectService.getInstance(project)
+            projectService.getLibraries()
+        }
+
+        // 获取构建配置
+        router.get("/api/v1/project/build-config") { _, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val projectService = com.ly.ideamcp.service.ProjectService.getInstance(project)
+            projectService.getBuildConfig()
+        }
+
+        // ========== Phase 4.7: 工具 API ==========
+
+        // 格式化代码
+        router.post("/api/v1/tools/format") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.tools.FormatCodeRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val toolsService = com.ly.ideamcp.service.ToolsService.getInstance(project)
+            toolsService.formatCode(request)
+        }
+
+        // 优化导入
+        router.post("/api/v1/tools/optimize-imports") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.tools.OptimizeImportsRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val toolsService = com.ly.ideamcp.service.ToolsService.getInstance(project)
+            toolsService.optimizeImports(request)
+        }
+
+        // 应用快速修复
+        router.post("/api/v1/tools/quick-fix") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.tools.QuickFixRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val toolsService = com.ly.ideamcp.service.ToolsService.getInstance(project)
+            toolsService.applyQuickFix(request)
+        }
+
+        // 应用 Intention
+        router.post("/api/v1/tools/intention") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val request = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.tools.IntentionRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val toolsService = com.ly.ideamcp.service.ToolsService.getInstance(project)
+            toolsService.applyIntention(request)
+        }
+
         return router
     }
 
