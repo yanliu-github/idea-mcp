@@ -20,8 +20,9 @@ allprojects {
 // 子项目通用配置
 subprojects {
     apply(plugin = "java")
+    apply(plugin = "org.jetbrains.kotlin.jvm")
 
-    java {
+    configure<JavaPluginExtension> {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
