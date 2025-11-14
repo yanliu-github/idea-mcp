@@ -129,6 +129,132 @@ class ServerStartupActivity : StartupActivity {
             refactoringService.renameSymbol(renameRequest)
         }
 
+        // 提取方法
+        router.post("/api/v1/refactor/extract-method") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val extractMethodRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.refactor.ExtractMethodRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val refactoringService = com.ly.ideamcp.service.RefactoringService.getInstance(project)
+            refactoringService.extractMethod(extractMethodRequest)
+        }
+
+        // 提取变量
+        router.post("/api/v1/refactor/extract-variable") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val extractVariableRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.refactor.ExtractVariableRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val refactoringService = com.ly.ideamcp.service.RefactoringService.getInstance(project)
+            refactoringService.extractVariable(extractVariableRequest)
+        }
+
+        // 内联变量
+        router.post("/api/v1/refactor/inline-variable") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val inlineVariableRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.refactor.InlineVariableRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val refactoringService = com.ly.ideamcp.service.RefactoringService.getInstance(project)
+            refactoringService.inlineVariable(inlineVariableRequest)
+        }
+
+        // 改变签名
+        router.post("/api/v1/refactor/change-signature") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val changeSignatureRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.refactor.ChangeSignatureRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val refactoringService = com.ly.ideamcp.service.RefactoringService.getInstance(project)
+            refactoringService.changeSignature(changeSignatureRequest)
+        }
+
+        // 移动类/方法
+        router.post("/api/v1/refactor/move") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val moveRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.refactor.MoveRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val refactoringService = com.ly.ideamcp.service.RefactoringService.getInstance(project)
+            refactoringService.move(moveRequest)
+        }
+
+        // 提取接口
+        router.post("/api/v1/refactor/extract-interface") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val extractInterfaceRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.refactor.ExtractInterfaceRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val refactoringService = com.ly.ideamcp.service.RefactoringService.getInstance(project)
+            refactoringService.extractInterface(extractInterfaceRequest)
+        }
+
+        // 提取超类
+        router.post("/api/v1/refactor/extract-superclass") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val extractSuperclassRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.refactor.ExtractSuperclassRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val refactoringService = com.ly.ideamcp.service.RefactoringService.getInstance(project)
+            refactoringService.extractSuperclass(extractSuperclassRequest)
+        }
+
+        // 封装字段
+        router.post("/api/v1/refactor/encapsulate-field") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val encapsulateFieldRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.refactor.EncapsulateFieldRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val refactoringService = com.ly.ideamcp.service.RefactoringService.getInstance(project)
+            refactoringService.encapsulateField(encapsulateFieldRequest)
+        }
+
+        // 引入参数对象
+        router.post("/api/v1/refactor/introduce-parameter-object") { exchange, project ->
+            if (project == null) {
+                throw IllegalStateException("No active project")
+            }
+
+            val requestHandler = RequestHandler(router)
+            val introduceParameterObjectRequest = requestHandler.parseRequestBody(exchange, com.ly.ideamcp.model.refactor.IntroduceParameterObjectRequest::class.java)
+                ?: throw IllegalArgumentException("Missing request body")
+
+            val refactoringService = com.ly.ideamcp.service.RefactoringService.getInstance(project)
+            refactoringService.introduceParameterObject(introduceParameterObjectRequest)
+        }
+
         // ========== 导航 API ==========
 
         // 查找用途
