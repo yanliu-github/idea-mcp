@@ -6,6 +6,7 @@ import io.undertow.Undertow
 import io.undertow.server.HttpHandler
 import io.undertow.server.HttpServerExchange
 import io.undertow.util.Headers
+import io.undertow.util.HttpString
 import io.undertow.util.StatusCodes
 import java.net.InetSocketAddress
 
@@ -159,10 +160,10 @@ class UndertowServer(
         val responseHeaders = exchange.responseHeaders
 
         val allowedOrigins = settings.corsAllowedOrigins
-        responseHeaders.put(Headers.ACCESS_CONTROL_ALLOW_ORIGIN, allowedOrigins)
-        responseHeaders.put(Headers.ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, PUT, DELETE, OPTIONS")
-        responseHeaders.put(Headers.ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type, Authorization")
-        responseHeaders.put(Headers.ACCESS_CONTROL_MAX_AGE, "3600")
+        responseHeaders.put(HttpString("Access-Control-Allow-Origin"), allowedOrigins)
+        responseHeaders.put(HttpString("Access-Control-Allow-Methods"), "GET, POST, PUT, DELETE, OPTIONS")
+        responseHeaders.put(HttpString("Access-Control-Allow-Headers"), "Content-Type, Authorization")
+        responseHeaders.put(HttpString("Access-Control-Max-Age"), "3600")
     }
 
     /**

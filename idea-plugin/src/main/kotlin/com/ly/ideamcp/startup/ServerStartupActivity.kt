@@ -2,7 +2,7 @@ package com.ly.ideamcp.startup
 
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.startup.StartupActivity
+import com.intellij.openapi.startup.ProjectActivity
 import com.ly.ideamcp.config.PluginSettings
 import com.ly.ideamcp.server.RequestHandler
 import com.ly.ideamcp.server.RouterConfig
@@ -12,7 +12,7 @@ import com.ly.ideamcp.server.UndertowServer
  * 服务器启动活动
  * 在项目打开时自动启动 HTTP Server
  */
-class ServerStartupActivity : StartupActivity {
+class ServerStartupActivity : ProjectActivity {
     private val logger = Logger.getInstance(ServerStartupActivity::class.java)
 
     companion object {
@@ -37,7 +37,7 @@ class ServerStartupActivity : StartupActivity {
         }
     }
 
-    override fun runActivity(project: Project) {
+    override suspend fun execute(project: Project) {
         val settings = PluginSettings.getInstance()
 
         // 检查是否启用自动启动

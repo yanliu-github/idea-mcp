@@ -55,11 +55,9 @@ class SearchService(private val project: Project) {
                 }
 
                 // 如果指定了最大结果数，限制返回数量
-                val limitedResults = if (request.maxResults > 0) {
-                    results.take(request.maxResults)
-                } else {
-                    results
-                }
+                val limitedResults = request.maxResults?.let { max ->
+                    if (max > 0) results.take(max) else results
+                } ?: results
 
                 GlobalSearchResponse(
                     success = true,
@@ -100,38 +98,46 @@ class SearchService(private val project: Project) {
                     searchContext = FindModel.SearchContext.ANY
                 }
 
-                // 执行查找
+                // 执行查找 - 使用Processor收集UsageInfo
+                val usageInfoProcessor = com.intellij.util.Processor<com.intellij.usageView.UsageInfo> { usageInfo ->
+                    val psiFile = usageInfo.element?.containingFile
+                    if (psiFile != null) {
+                        val document = com.intellij.psi.PsiDocumentManager.getInstance(project)
+                            .getDocument(psiFile)
+                        if (document != null) {
+                            val textRange = usageInfo.element?.textRange
+                            if (textRange != null) {
+                                val line = document.getLineNumber(textRange.startOffset)
+                                val column = textRange.startOffset - document.getLineStartOffset(line)
+                                val preview = getPreviewText(document, textRange)
+
+                                results.add(
+                                    SearchResult(
+                                        filePath = psiFile.virtualFile?.path ?: psiFile.name,
+                                        line = line + 1,
+                                        column = column,
+                                        preview = preview,
+                                        matchType = "text"
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    // 如果指定了最大结果数且已达到，停止处理
+                    val maxResults = request.maxResults ?: 0
+                    maxResults <= 0 || results.size < maxResults
+                }
+
+                val presentation = com.intellij.usages.FindUsagesProcessPresentation(
+                    com.intellij.usages.UsageViewPresentation()
+                )
+
                 FindInProjectUtil.findUsages(
                     findModel,
                     project,
-                    { usage ->
-                        val psiFile = usage.element?.containingFile
-                        if (psiFile != null) {
-                            val document = com.intellij.psi.PsiDocumentManager.getInstance(project)
-                                .getDocument(psiFile)
-                            if (document != null) {
-                                val textRange = usage.rangeInElement ?: usage.element?.textRange
-                                if (textRange != null) {
-                                    val line = document.getLineNumber(textRange.startOffset)
-                                    val column = textRange.startOffset - document.getLineStartOffset(line)
-                                    val preview = getPreviewText(document, textRange)
-
-                                    results.add(
-                                        SearchResult(
-                                            filePath = psiFile.virtualFile?.path ?: psiFile.name,
-                                            line = line + 1,
-                                            column = column,
-                                            preview = preview,
-                                            matchType = "text"
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                        // 如果指定了最大结果数且已达到，停止查找
-                        request.maxResults <= 0 || results.size < request.maxResults
-                    },
-                    null
+                    usageInfoProcessor,
+                    presentation
                 )
 
                 TextSearchResponse(
@@ -169,59 +175,75 @@ class SearchService(private val project: Project) {
 
             try {
                 // 创建匹配选项
-                val matchOptions = MatchOptions().apply {
-                    searchPattern = request.pattern
-                    scope = GlobalSearchScope.projectScope(project)
-                    isCaseSensitiveMatch = request.caseSensitive
-                }
+                val matchOptions = MatchOptions()
+                matchOptions.searchPattern = request.pattern
+                matchOptions.scope = GlobalSearchScope.projectScope(project)
+                matchOptions.isCaseSensitiveMatch = request.caseSensitive
 
                 // 创建匹配器
-                val matcher = Matcher(project)
+                val matcher = Matcher(project, matchOptions)
 
-                // 执行结构化搜索
-                val matchResults = matcher.testFindMatches(
-                    matchOptions,
-                    false,
-                    null,
-                    false
-                )
+                // 创建结果收集器
+                val matchResultSink = object : com.intellij.structuralsearch.MatchResultSink {
+                    private var matchingProcess: com.intellij.structuralsearch.MatchingProcess? = null
 
-                // 处理匹配结果
-                matchResults.forEach { matchResult ->
-                    val psiFile = matchResult.match?.containingFile
-                    if (psiFile != null) {
-                        val document = com.intellij.psi.PsiDocumentManager.getInstance(project)
-                            .getDocument(psiFile)
-                        if (document != null) {
-                            val textRange = matchResult.match?.textRange
-                            if (textRange != null) {
-                                val line = document.getLineNumber(textRange.startOffset)
-                                val column = textRange.startOffset - document.getLineStartOffset(line)
-                                val preview = getPreviewText(document, textRange)
+                    override fun setMatchingProcess(matchingProcess: com.intellij.structuralsearch.MatchingProcess) {
+                        this.matchingProcess = matchingProcess
+                    }
 
-                                results.add(
-                                    SearchResult(
-                                        filePath = psiFile.virtualFile?.path ?: psiFile.name,
-                                        line = line + 1,
-                                        column = column,
-                                        preview = preview,
-                                        matchType = "structure"
+                    override fun getProgressIndicator(): com.intellij.openapi.progress.ProgressIndicator? {
+                        return null
+                    }
+
+                    override fun newMatch(result: com.intellij.structuralsearch.MatchResult) {
+                        val psiFile = result.match?.containingFile
+                        if (psiFile != null) {
+                            val document = com.intellij.psi.PsiDocumentManager.getInstance(project)
+                                .getDocument(psiFile)
+                            if (document != null) {
+                                val textRange = result.match?.textRange
+                                if (textRange != null) {
+                                    val line = document.getLineNumber(textRange.startOffset)
+                                    val column = textRange.startOffset - document.getLineStartOffset(line)
+                                    val preview = getPreviewText(document, textRange)
+
+                                    results.add(
+                                        SearchResult(
+                                            filePath = psiFile.virtualFile?.path ?: psiFile.name,
+                                            line = line + 1,
+                                            column = column,
+                                            preview = preview,
+                                            matchType = "structure"
+                                        )
                                     )
-                                )
+
+                                    // 如果指定了最大结果数且已达到，停止匹配
+                                    val maxResults = request.maxResults ?: 0
+                                    if (maxResults > 0 && results.size >= maxResults) {
+                                        matchingProcess?.stop()
+                                    }
+                                }
                             }
                         }
                     }
 
-                    // 如果指定了最大结果数且已达到，停止处理
-                    if (request.maxResults > 0 && results.size >= request.maxResults) {
-                        return@forEach
+                    override fun processFile(file: com.intellij.psi.PsiFile) {
+                        // 必须实现的回调，用于处理文件
+                    }
+
+                    override fun matchingFinished() {
+                        // 匹配完成的回调
                     }
                 }
 
+                // 执行结构化搜索
+                matcher.testFindMatches(matchResultSink)
+
+                val maxResults = request.maxResults ?: 0
                 StructuralSearchResponse(
                     success = true,
                     pattern = request.pattern,
-                    results = results.take(request.maxResults.takeIf { it > 0 } ?: results.size),
+                    results = results.take(maxResults.takeIf { it > 0 } ?: results.size),
                     totalResults = results.size
                 )
             } catch (e: Exception) {

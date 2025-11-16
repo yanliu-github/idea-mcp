@@ -10,7 +10,7 @@ import com.intellij.refactoring.extractMethod.ExtractMethodHandler
 import com.intellij.refactoring.extractMethod.ExtractMethodProcessor
 import com.intellij.refactoring.introduceVariable.IntroduceVariableHandler
 import com.intellij.refactoring.inline.InlineRefactoringActionHandler
-import com.intellij.refactoring.changeSignature.ChangeSignatureHandler
+import com.intellij.refactoring.changeSignature.JavaChangeSignatureHandler
 import com.intellij.refactoring.move.MoveHandler
 import com.intellij.refactoring.extractInterface.ExtractInterfaceHandler
 import com.intellij.refactoring.extractSuperclass.ExtractSuperclassHandler
@@ -849,8 +849,8 @@ class RefactoringService(private val project: Project) {
                 // 创建临时编辑器
                 val editor = createEditorForFile(method.containingFile)
 
-                // 使用 ChangeSignatureHandler 执行重构
-                val handler = ChangeSignatureHandler()
+                // 使用 Java 的 ChangeSignatureHandler
+                val handler = com.intellij.refactoring.changeSignature.JavaChangeSignatureHandler()
                 handler.invoke(project, arrayOf(method), null)
 
                 logger.info("Change signature completed successfully")

@@ -84,7 +84,8 @@ class VcsService(private val project: Project) {
                 val commits = mutableListOf<CommitInfo>()
 
                 // 获取文件历史
-                val session = historyProvider.createSessionFor(vcs.getVcsRootFor(virtualFile)!!, virtualFile)
+                val vcsFilePath = com.intellij.vcsUtil.VcsUtil.getFilePath(virtualFile)
+                val session = historyProvider.createSessionFor(vcsFilePath)
                 if (session != null) {
                     val revisions = session.revisionList
                     val maxRevisions = if (request.maxResults > 0) request.maxResults else revisions.size
@@ -189,7 +190,7 @@ class VcsService(private val project: Project) {
                             val revision = fileAnnotation.getLineRevisionNumber(lineNumber)
                             if (revision != null) {
                                 val date = fileAnnotation.getLineDate(lineNumber)
-                                val author = fileAnnotation.getLineAuthor(lineNumber)
+                                val author = revision.asString()
 
                                 annotations.add(
                                     LineAnnotation(

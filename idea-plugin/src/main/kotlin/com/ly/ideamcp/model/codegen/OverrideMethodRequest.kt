@@ -17,7 +17,13 @@ data class OverrideMethodRequest(
     val column: Int? = null,
 
     /** 要重写的方法名称 */
-    val methodName: String
+    val methodName: String,
+
+    /** 方法参数类型列表（用于匹配重载方法） */
+    val parameterTypes: List<String> = emptyList(),
+
+    /** 是否调用父类方法 */
+    val callSuper: Boolean = true
 ) {
     init {
         require(filePath.isNotBlank()) { "File path cannot be blank" }

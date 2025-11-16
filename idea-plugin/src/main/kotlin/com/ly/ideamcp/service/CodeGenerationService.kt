@@ -58,9 +58,11 @@ class CodeGenerationService(private val project: Project) {
 
         // 获取类中的字段
         val fields = ThreadHelper.runReadAction {
-            if (request.fieldNames.isNotEmpty()) {
+            if (request.fieldNames?.isNotEmpty() == true) {
                 // 如果指定了字段名，只处理这些字段
-                psiClass.fields.filter { it.name in request.fieldNames }
+                psiClass.fields.filter { field ->
+                    request.fieldNames?.contains(field.name) == true
+                }
             } else {
                 // 否则处理所有字段
                 psiClass.fields.toList()
@@ -82,7 +84,7 @@ class CodeGenerationService(private val project: Project) {
                 val fieldType = field.type
 
                 // 生成 Getter
-                if (request.generateGetters) {
+                if (request.generateGetter) {
                     val getterName = "get${fieldName.replaceFirstChar { it.uppercaseChar() }}"
 
                     // 检查是否已存在
@@ -107,7 +109,7 @@ class CodeGenerationService(private val project: Project) {
                 }
 
                 // 生成 Setter
-                if (request.generateSetters) {
+                if (request.generateSetter) {
                     val setterName = "set${fieldName.replaceFirstChar { it.uppercaseChar() }}"
 
                     // 检查是否已存在

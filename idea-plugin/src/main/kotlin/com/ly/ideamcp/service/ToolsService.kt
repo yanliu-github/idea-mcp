@@ -199,21 +199,32 @@ class ToolsService(private val project: Project) {
                     .selectedTextEditor
                     ?: createTemporaryEditor(psiFile)
 
+                // 移动光标到指定位置
+                editor.caretModel.moveToOffset(offset)
+
                 // 获取指定位置的所有可用快速修复
-                val intentions = com.intellij.codeInsight.daemon.impl.ShowIntentionsPass
-                    .getActionsToShow(editor, psiFile, offset, false)
+                val intentionManager = com.intellij.codeInsight.intention.IntentionManager.getInstance()
+                val availableIntentions = intentionManager.availableIntentions
 
                 // 查找匹配的快速修复
-                val matchingIntention = intentions.firstOrNull { intention ->
-                    intention.action.text.contains(request.fixId, ignoreCase = true) ||
-                    intention.action.familyName.contains(request.fixId, ignoreCase = true) ||
-                    intention.action.javaClass.simpleName.contains(request.fixId, ignoreCase = true)
+                val matchingIntention = availableIntentions.firstOrNull { intention ->
+                    val isAvailable = try {
+                        intention.isAvailable(project, editor, psiFile)
+                    } catch (e: Exception) {
+                        false
+                    }
+
+                    isAvailable && (
+                        intention.text.contains(request.fixId, ignoreCase = true) ||
+                        intention.familyName.contains(request.fixId, ignoreCase = true) ||
+                        intention.javaClass.simpleName.contains(request.fixId, ignoreCase = true)
+                    )
                 }
 
                 if (matchingIntention != null) {
                     // 应用快速修复
                     ThreadHelper.runWriteAction {
-                        matchingIntention.action.invoke(project, editor, psiFile)
+                        matchingIntention.invoke(project, editor, psiFile)
                     }
                     true
                 } else {

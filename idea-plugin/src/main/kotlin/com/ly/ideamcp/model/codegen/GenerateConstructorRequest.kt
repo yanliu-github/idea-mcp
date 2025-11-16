@@ -17,7 +17,10 @@ data class GenerateConstructorRequest(
     val column: Int? = null,
 
     /** 要包含的字段列表 */
-    val fields: List<FieldInfo> = emptyList()
+    val fields: List<FieldInfo> = emptyList(),
+
+    /** 是否调用父类构造函数 */
+    val callSuper: Boolean = false
 ) {
     init {
         require(filePath.isNotBlank()) { "File path cannot be blank" }

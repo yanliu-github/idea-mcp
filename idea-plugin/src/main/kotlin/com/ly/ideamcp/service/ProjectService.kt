@@ -29,8 +29,8 @@ class ProjectService(private val project: Project) {
             val modules = ModuleManager.getInstance(project).modules.map { module ->
                 ModuleInfo(
                     name = module.name,
-                    path = module.moduleFilePath,
-                    type = module.moduleTypeName
+                    path = module.moduleFilePath ?: "",
+                    type = module.moduleTypeName ?: "UNKNOWN"
                 )
             }
 
@@ -55,8 +55,8 @@ class ProjectService(private val project: Project) {
             val modules = ModuleManager.getInstance(project).modules.map { module ->
                 ModuleInfo(
                     name = module.name,
-                    path = module.moduleFilePath,
-                    type = module.moduleTypeName
+                    path = module.moduleFilePath ?: "",
+                    type = module.moduleTypeName ?: "UNKNOWN"
                 )
             }
 

@@ -237,8 +237,8 @@ class DependencyService(private val project: Project) {
                     val cyclePath = currentPath.subList(cycleStartIndex, currentPath.size) + dependency
                     cycles.add(
                         DependencyCycle(
-                            modules = cyclePath,
-                            severity = determineCycleSeverity(cyclePath.size)
+                            nodes = cyclePath,
+                            description = "Circular dependency involving ${cyclePath.size} modules"
                         )
                     )
                 }
@@ -253,12 +253,13 @@ class DependencyService(private val project: Project) {
      * 确定依赖强度
      */
     private fun determineStrength(orderEntry: OrderEntry): String {
-        return when {
-            orderEntry.scope.name == "COMPILE" -> "strong"
-            orderEntry.scope.name == "RUNTIME" -> "medium"
-            orderEntry.scope.name == "PROVIDED" -> "weak"
-            orderEntry.scope.name == "TEST" -> "test"
-            else -> "unknown"
+        return when (orderEntry) {
+            is ModuleOrderEntry -> "strong"
+            is LibraryOrderEntry -> when {
+                orderEntry.isExported -> "strong"
+                else -> "medium"
+            }
+            else -> "weak"
         }
     }
 

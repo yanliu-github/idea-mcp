@@ -9,6 +9,7 @@ import com.intellij.psi.PsiManager
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.psi.util.PsiUtilCore
+import com.intellij.psi.codeStyle.CodeStyleManager
 import com.ly.ideamcp.model.CodeLocation
 import com.ly.ideamcp.model.CodeRange
 import java.io.File
@@ -180,5 +181,23 @@ object PsiHelper {
         } else {
             filePath
         }
+    }
+
+    /**
+     * 格式化代码
+     * @param project 项目
+     * @param element PSI 元素
+     */
+    fun reformatCode(project: Project, element: PsiElement) {
+        CodeStyleManager.getInstance(project).reformat(element)
+    }
+
+    /**
+     * 格式化代码文件
+     * @param project 项目
+     * @param psiFile PSI 文件
+     */
+    fun reformatCode(project: Project, psiFile: PsiFile) {
+        CodeStyleManager.getInstance(project).reformat(psiFile)
     }
 }
