@@ -32,64 +32,94 @@ class CodeGenerationService(private val project: Project) {
     fun generateGettersSetters(request: GenerateGettersSettersRequest): GenerateGettersSettersResponse {
         logger.info("Generating getters/setters for fields in file: ${request.filePath}")
 
-        val psiFile = ThreadHelper.runReadAction {
-            PsiHelper.findPsiFile(project, request.filePath)
+        // Phase 1: ReadAction - 收集所有需要的数据
+        data class FieldData(
+            val name: String,
+            val typeName: String,
+            val typeCanonicalText: String
+        )
+
+        data class PreparedData(
+            val offset: Int,
+            val fields: List<FieldData>,
+            val existingGetters: Set<String>,
+            val existingSetters: Set<String>
+        )
+
+        val preparedData = ThreadHelper.runReadAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
-        }
 
-        val document = ThreadHelper.runReadAction {
-            PsiHelper.getDocument(psiFile)
+            val document = PsiHelper.getDocument(psiFile)
                 ?: throw IllegalStateException("Cannot get document")
-        }
 
-        val offset = request.offset ?: run {
-            OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
-                ?: throw IllegalArgumentException("Invalid line/column position")
-        }
+            val offset = request.offset ?: run {
+                OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
+                    ?: throw IllegalArgumentException("Invalid line/column position")
+            }
 
-        logger.info("Generating getters/setters at offset: $offset")
-
-        // 查找光标所在的类
-        val psiClass = ThreadHelper.runReadAction {
+            // 查找光标所在的类
             val element = psiFile.findElementAt(offset)
-            PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
                 ?: throw IllegalArgumentException("No class found at offset: $offset")
-        }
 
-        // 获取类中的字段
-        val fields = ThreadHelper.runReadAction {
-            if (request.fieldNames?.isNotEmpty() == true) {
-                // 如果指定了字段名，只处理这些字段
+            // 获取类中的字段
+            val allFields = if (request.fieldNames?.isNotEmpty() == true) {
                 psiClass.fields.filter { field ->
                     request.fieldNames?.contains(field.name) == true
                 }
             } else {
-                // 否则处理所有字段
                 psiClass.fields.toList()
             }
+
+            if (allFields.isEmpty()) {
+                throw IllegalArgumentException("No fields found to generate getters/setters")
+            }
+
+            // 收集字段信息
+            val fields = allFields.mapNotNull { field ->
+                val name = field.name ?: return@mapNotNull null
+                FieldData(
+                    name = name,
+                    typeName = field.type.presentableText,
+                    typeCanonicalText = field.type.canonicalText
+                )
+            }
+
+            // 收集已存在的方法名
+            val existingGetters = psiClass.methods
+                .filter { it.name.startsWith("get") }
+                .map { it.name }
+                .toSet()
+
+            val existingSetters = psiClass.methods
+                .filter { it.name.startsWith("set") }
+                .map { it.name }
+                .toSet()
+
+            PreparedData(offset, fields, existingGetters, existingSetters)
         }
 
-        if (fields.isEmpty()) {
-            throw IllegalArgumentException("No fields found to generate getters/setters")
-        }
+        logger.info("Generating getters/setters at offset: ${preparedData.offset}")
 
-        // 生成 getter/setter 方法
-        val generatedMethods = mutableListOf<GeneratedMethod>()
+        // Phase 2: WriteAction - 生成代码（所有 PSI 操作在单个 WriteAction 中完成）
+        val generatedMethods = ThreadHelper.runWriteAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)!!
+            val element = psiFile.findElementAt(preparedData.offset)
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)!!
 
-        ThreadHelper.runWriteAction {
             val factory = JavaPsiFacade.getElementFactory(project)
+            val methods = mutableListOf<GeneratedMethod>()
 
-            fields.forEach { field ->
-                val fieldName = field.name ?: return@forEach
-                val fieldType = field.type
+            preparedData.fields.forEach { fieldData ->
+                val fieldName = fieldData.name
+                val fieldType = factory.createTypeFromText(fieldData.typeCanonicalText, psiClass)
 
                 // 生成 Getter
                 if (request.generateGetter) {
                     val getterName = "get${fieldName.replaceFirstChar { it.uppercaseChar() }}"
 
-                    // 检查是否已存在
-                    val existingGetter = psiClass.findMethodsByName(getterName, false).firstOrNull()
-                    if (existingGetter == null) {
+                    if (getterName !in preparedData.existingGetters) {
                         val getter = factory.createMethod(getterName, fieldType)
                         getter.modifierList.setModifierProperty(PsiModifier.PUBLIC, true)
 
@@ -98,7 +128,7 @@ class CodeGenerationService(private val project: Project) {
 
                         val addedGetter = psiClass.add(getter) as PsiMethod
 
-                        generatedMethods.add(
+                        methods.add(
                             GeneratedMethod(
                                 name = getterName,
                                 signature = buildMethodSignature(addedGetter),
@@ -112,9 +142,7 @@ class CodeGenerationService(private val project: Project) {
                 if (request.generateSetter) {
                     val setterName = "set${fieldName.replaceFirstChar { it.uppercaseChar() }}"
 
-                    // 检查是否已存在
-                    val existingSetter = psiClass.findMethodsByName(setterName, false).firstOrNull()
-                    if (existingSetter == null) {
+                    if (setterName !in preparedData.existingSetters) {
                         val setter = factory.createMethod(setterName, PsiTypes.voidType())
                         setter.modifierList.setModifierProperty(PsiModifier.PUBLIC, true)
 
@@ -126,7 +154,7 @@ class CodeGenerationService(private val project: Project) {
 
                         val addedSetter = psiClass.add(setter) as PsiMethod
 
-                        generatedMethods.add(
+                        methods.add(
                             GeneratedMethod(
                                 name = setterName,
                                 signature = buildMethodSignature(addedSetter),
@@ -137,8 +165,10 @@ class CodeGenerationService(private val project: Project) {
                 }
             }
 
-            // 格式化代码
-            PsiHelper.reformatCode(project, psiClass)
+            // 格式化代码（已在 WriteAction 中）
+            com.intellij.psi.codeStyle.CodeStyleManager.getInstance(project).reformat(psiClass)
+
+            methods
         }
 
         return GenerateGettersSettersResponse(
@@ -156,39 +186,47 @@ class CodeGenerationService(private val project: Project) {
     fun generateConstructor(request: GenerateConstructorRequest): GenerateConstructorResponse {
         logger.info("Generating constructor in file: ${request.filePath}")
 
-        val psiFile = ThreadHelper.runReadAction {
-            PsiHelper.findPsiFile(project, request.filePath)
+        // Phase 1: ReadAction - 收集所有需要的数据
+        data class PreparedData(
+            val offset: Int,
+            val className: String
+        )
+
+        val preparedData = ThreadHelper.runReadAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
-        }
 
-        val document = ThreadHelper.runReadAction {
-            PsiHelper.getDocument(psiFile)
+            val document = PsiHelper.getDocument(psiFile)
                 ?: throw IllegalStateException("Cannot get document")
-        }
 
-        val offset = request.offset ?: run {
-            OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
-                ?: throw IllegalArgumentException("Invalid line/column position")
-        }
+            val offset = request.offset ?: run {
+                OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
+                    ?: throw IllegalArgumentException("Invalid line/column position")
+            }
 
-        logger.info("Generating constructor at offset: $offset")
-
-        // 查找光标所在的类
-        val psiClass = ThreadHelper.runReadAction {
+            // 查找光标所在的类
             val element = psiFile.findElementAt(offset)
-            PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
                 ?: throw IllegalArgumentException("No class found at offset: $offset")
+
+            val className = psiClass.name
+                ?: throw IllegalStateException("Class name is null")
+
+            PreparedData(offset, className)
         }
 
-        val className = ThreadHelper.runReadAction { psiClass.name }
-            ?: throw IllegalStateException("Class name is null")
+        logger.info("Generating constructor at offset: ${preparedData.offset}")
 
-        // 生成构造函数
+        // Phase 2: WriteAction - 生成构造函数（所有 PSI 操作在单个 WriteAction 中完成）
         val constructor = ThreadHelper.runWriteAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)!!
+            val element = psiFile.findElementAt(preparedData.offset)
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)!!
+
             val factory = JavaPsiFacade.getElementFactory(project)
 
             // 创建构造函数
-            val method = factory.createConstructor(className)
+            val method = factory.createConstructor(preparedData.className)
             method.modifierList.setModifierProperty(PsiModifier.PUBLIC, true)
 
             // 添加参数
@@ -217,8 +255,8 @@ class CodeGenerationService(private val project: Project) {
             // 添加到类中
             val addedConstructor = psiClass.add(method) as PsiMethod
 
-            // 格式化代码
-            PsiHelper.reformatCode(project, addedConstructor)
+            // 格式化代码（已在 WriteAction 中）
+            com.intellij.psi.codeStyle.CodeStyleManager.getInstance(project).reformat(addedConstructor)
 
             addedConstructor
         }
@@ -226,7 +264,7 @@ class CodeGenerationService(private val project: Project) {
         return GenerateConstructorResponse(
             success = true,
             constructor = GeneratedMethod(
-                name = className,
+                name = preparedData.className,
                 signature = buildMethodSignature(constructor),
                 offset = constructor.textRange.startOffset
             ),
@@ -242,47 +280,57 @@ class CodeGenerationService(private val project: Project) {
     fun generateToString(request: GenerateMethodRequest): GenerateMethodResponse {
         logger.info("Generating toString method in file: ${request.filePath}")
 
-        val psiFile = ThreadHelper.runReadAction {
-            PsiHelper.findPsiFile(project, request.filePath)
+        // Phase 1: ReadAction - 收集所有需要的数据
+        data class PreparedData(
+            val offset: Int,
+            val className: String,
+            val fieldNames: List<String>,
+            val hasExistingToString: Boolean
+        )
+
+        val preparedData = ThreadHelper.runReadAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
-        }
 
-        val document = ThreadHelper.runReadAction {
-            PsiHelper.getDocument(psiFile)
+            val document = PsiHelper.getDocument(psiFile)
                 ?: throw IllegalStateException("Cannot get document")
-        }
 
-        val offset = request.offset ?: run {
-            OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
-                ?: throw IllegalArgumentException("Invalid line/column position")
-        }
+            val offset = request.offset ?: run {
+                OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
+                    ?: throw IllegalArgumentException("Invalid line/column position")
+            }
 
-        logger.info("Generating toString at offset: $offset")
-
-        // 查找光标所在的类
-        val psiClass = ThreadHelper.runReadAction {
+            // 查找光标所在的类
             val element = psiFile.findElementAt(offset)
-            PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
                 ?: throw IllegalArgumentException("No class found at offset: $offset")
+
+            val className = psiClass.name
+                ?: throw IllegalStateException("Class name is null")
+
+            // 获取类的非静态字段名
+            val fieldNames = psiClass.fields
+                .filter { !it.hasModifierProperty(PsiModifier.STATIC) }
+                .mapNotNull { it.name }
+
+            val hasExistingToString = psiClass.findMethodsByName("toString", false).isNotEmpty()
+
+            PreparedData(offset, className, fieldNames, hasExistingToString)
         }
 
-        val className = ThreadHelper.runReadAction { psiClass.name }
-            ?: throw IllegalStateException("Class name is null")
+        logger.info("Generating toString at offset: ${preparedData.offset}")
 
-        // 获取类的字段
-        val fields = ThreadHelper.runReadAction {
-            psiClass.fields.filter { !it.hasModifierProperty(PsiModifier.STATIC) }
-        }
-
-        // 生成 toString 方法
+        // Phase 2: WriteAction - 生成方法（所有 PSI 操作在单个 WriteAction 中完成）
         val toStringMethod = ThreadHelper.runWriteAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)!!
+            val element = psiFile.findElementAt(preparedData.offset)
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)!!
+
             val factory = JavaPsiFacade.getElementFactory(project)
 
-            // 检查是否已存在 toString 方法
-            val existingMethod = psiClass.findMethodsByName("toString", false).firstOrNull()
-            if (existingMethod != null) {
-                // 如果存在，先删除
-                existingMethod.delete()
+            // 检查是否已存在 toString 方法，如果存在则删除
+            if (preparedData.hasExistingToString) {
+                psiClass.findMethodsByName("toString", false).firstOrNull()?.delete()
             }
 
             // 创建 toString 方法
@@ -299,21 +347,20 @@ class CodeGenerationService(private val project: Project) {
             // 构建 toString 内容
             val body = method.body ?: throw IllegalStateException("Method body is null")
 
-            if (fields.isEmpty()) {
+            if (preparedData.fieldNames.isEmpty()) {
                 // 没有字段，返回简单的类名
                 val returnStatement = factory.createStatementFromText(
-                    "return \"$className{}\";",
+                    "return \"${preparedData.className}{}\";",
                     method
                 )
                 body.add(returnStatement)
             } else {
                 // 构建包含所有字段的字符串
-                val fieldParts = fields.joinToString(", ") { field ->
-                    val fieldName = field.name
+                val fieldParts = preparedData.fieldNames.joinToString(", ") { fieldName ->
                     "$fieldName=\" + $fieldName + \""
                 }
                 val returnStatement = factory.createStatementFromText(
-                    "return \"$className{$fieldParts}\";",
+                    "return \"${preparedData.className}{$fieldParts}\";",
                     method
                 )
                 body.add(returnStatement)
@@ -322,8 +369,8 @@ class CodeGenerationService(private val project: Project) {
             // 添加到类中
             val addedMethod = psiClass.add(method) as PsiMethod
 
-            // 格式化代码
-            PsiHelper.reformatCode(project, addedMethod)
+            // 格式化代码（已在 WriteAction 中）
+            com.intellij.psi.codeStyle.CodeStyleManager.getInstance(project).reformat(addedMethod)
 
             addedMethod
         }
@@ -347,47 +394,65 @@ class CodeGenerationService(private val project: Project) {
     fun generateEquals(request: GenerateMethodRequest): GenerateMethodResponse {
         logger.info("Generating equals method in file: ${request.filePath}")
 
-        val psiFile = ThreadHelper.runReadAction {
-            PsiHelper.findPsiFile(project, request.filePath)
+        // Phase 1: ReadAction - 收集所有需要的数据
+        data class FieldInfo(
+            val name: String,
+            val isPrimitive: Boolean
+        )
+
+        data class PreparedData(
+            val offset: Int,
+            val className: String,
+            val fields: List<FieldInfo>,
+            val hasExistingEquals: Boolean
+        )
+
+        val preparedData = ThreadHelper.runReadAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
-        }
 
-        val document = ThreadHelper.runReadAction {
-            PsiHelper.getDocument(psiFile)
+            val document = PsiHelper.getDocument(psiFile)
                 ?: throw IllegalStateException("Cannot get document")
-        }
 
-        val offset = request.offset ?: run {
-            OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
-                ?: throw IllegalArgumentException("Invalid line/column position")
-        }
+            val offset = request.offset ?: run {
+                OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
+                    ?: throw IllegalArgumentException("Invalid line/column position")
+            }
 
-        logger.info("Generating equals at offset: $offset")
-
-        // 查找光标所在的类
-        val psiClass = ThreadHelper.runReadAction {
+            // 查找光标所在的类
             val element = psiFile.findElementAt(offset)
-            PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
                 ?: throw IllegalArgumentException("No class found at offset: $offset")
+
+            val className = psiClass.name
+                ?: throw IllegalStateException("Class name is null")
+
+            // 获取类的非静态字段信息
+            val fields = psiClass.fields
+                .filter { !it.hasModifierProperty(PsiModifier.STATIC) }
+                .mapNotNull { field ->
+                    val name = field.name ?: return@mapNotNull null
+                    FieldInfo(name, field.type is PsiPrimitiveType)
+                }
+
+            val hasExistingEquals = psiClass.findMethodsByName("equals", false).isNotEmpty()
+
+            PreparedData(offset, className, fields, hasExistingEquals)
         }
 
-        val className = ThreadHelper.runReadAction { psiClass.name }
-            ?: throw IllegalStateException("Class name is null")
+        logger.info("Generating equals at offset: ${preparedData.offset}")
 
-        // 获取类的字段
-        val fields = ThreadHelper.runReadAction {
-            psiClass.fields.filter { !it.hasModifierProperty(PsiModifier.STATIC) }
-        }
-
-        // 生成 equals 方法
+        // Phase 2: WriteAction - 生成方法（所有 PSI 操作在单个 WriteAction 中完成）
         val equalsMethod = ThreadHelper.runWriteAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)!!
+            val element = psiFile.findElementAt(preparedData.offset)
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)!!
+
             val factory = JavaPsiFacade.getElementFactory(project)
 
-            // 检查是否已存在 equals 方法
-            val existingMethod = psiClass.findMethodsByName("equals", false).firstOrNull()
-            if (existingMethod != null) {
-                // 如果存在，先删除
-                existingMethod.delete()
+            // 检查是否已存在 equals 方法，如果存在则删除
+            if (preparedData.hasExistingEquals) {
+                psiClass.findMethodsByName("equals", false).firstOrNull()?.delete()
             }
 
             // 创建 equals 方法
@@ -410,24 +475,18 @@ class CodeGenerationService(private val project: Project) {
             body.add(factory.createStatementFromText("if (this == obj) return true;", method))
             body.add(factory.createStatementFromText("if (obj == null || getClass() != obj.getClass()) return false;", method))
 
-            if (fields.isNotEmpty()) {
+            if (preparedData.fields.isNotEmpty()) {
                 // 类型转换
-                body.add(factory.createStatementFromText("$className that = ($className) obj;", method))
+                body.add(factory.createStatementFromText("${preparedData.className} that = (${preparedData.className}) obj;", method))
 
                 // 字段比较
-                val comparisons = fields.joinToString(" && ") { field ->
-                    val fieldName = field.name
-                    val fieldType = field.type
-
-                    when {
-                        fieldType is PsiPrimitiveType -> {
-                            // 基本类型直接比较
-                            "$fieldName == that.$fieldName"
-                        }
-                        else -> {
-                            // 引用类型使用 Objects.equals
-                            "java.util.Objects.equals($fieldName, that.$fieldName)"
-                        }
+                val comparisons = preparedData.fields.joinToString(" && ") { field ->
+                    if (field.isPrimitive) {
+                        // 基本类型直接比较
+                        "${field.name} == that.${field.name}"
+                    } else {
+                        // 引用类型使用 Objects.equals
+                        "java.util.Objects.equals(${field.name}, that.${field.name})"
                     }
                 }
 
@@ -440,8 +499,8 @@ class CodeGenerationService(private val project: Project) {
             // 添加到类中
             val addedMethod = psiClass.add(method) as PsiMethod
 
-            // 格式化代码
-            PsiHelper.reformatCode(project, addedMethod)
+            // 格式化代码（已在 WriteAction 中）
+            com.intellij.psi.codeStyle.CodeStyleManager.getInstance(project).reformat(addedMethod)
 
             addedMethod
         }
@@ -465,44 +524,53 @@ class CodeGenerationService(private val project: Project) {
     fun generateHashCode(request: GenerateMethodRequest): GenerateMethodResponse {
         logger.info("Generating hashCode method in file: ${request.filePath}")
 
-        val psiFile = ThreadHelper.runReadAction {
-            PsiHelper.findPsiFile(project, request.filePath)
+        // Phase 1: ReadAction - 收集所有需要的数据
+        data class PreparedData(
+            val offset: Int,
+            val fieldNames: List<String>,
+            val hasExistingHashCode: Boolean
+        )
+
+        val preparedData = ThreadHelper.runReadAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
-        }
 
-        val document = ThreadHelper.runReadAction {
-            PsiHelper.getDocument(psiFile)
+            val document = PsiHelper.getDocument(psiFile)
                 ?: throw IllegalStateException("Cannot get document")
-        }
 
-        val offset = request.offset ?: run {
-            OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
-                ?: throw IllegalArgumentException("Invalid line/column position")
-        }
+            val offset = request.offset ?: run {
+                OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
+                    ?: throw IllegalArgumentException("Invalid line/column position")
+            }
 
-        logger.info("Generating hashCode at offset: $offset")
-
-        // 查找光标所在的类
-        val psiClass = ThreadHelper.runReadAction {
+            // 查找光标所在的类
             val element = psiFile.findElementAt(offset)
-            PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
                 ?: throw IllegalArgumentException("No class found at offset: $offset")
+
+            // 获取类的非静态字段名
+            val fieldNames = psiClass.fields
+                .filter { !it.hasModifierProperty(PsiModifier.STATIC) }
+                .mapNotNull { it.name }
+
+            val hasExistingHashCode = psiClass.findMethodsByName("hashCode", false).isNotEmpty()
+
+            PreparedData(offset, fieldNames, hasExistingHashCode)
         }
 
-        // 获取类的字段
-        val fields = ThreadHelper.runReadAction {
-            psiClass.fields.filter { !it.hasModifierProperty(PsiModifier.STATIC) }
-        }
+        logger.info("Generating hashCode at offset: ${preparedData.offset}")
 
-        // 生成 hashCode 方法
+        // Phase 2: WriteAction - 生成方法（所有 PSI 操作在单个 WriteAction 中完成）
         val hashCodeMethod = ThreadHelper.runWriteAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)!!
+            val element = psiFile.findElementAt(preparedData.offset)
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)!!
+
             val factory = JavaPsiFacade.getElementFactory(project)
 
-            // 检查是否已存在 hashCode 方法
-            val existingMethod = psiClass.findMethodsByName("hashCode", false).firstOrNull()
-            if (existingMethod != null) {
-                // 如果存在，先删除
-                existingMethod.delete()
+            // 检查是否已存在 hashCode 方法，如果存在则删除
+            if (preparedData.hasExistingHashCode) {
+                psiClass.findMethodsByName("hashCode", false).firstOrNull()?.delete()
             }
 
             // 创建 hashCode 方法
@@ -516,20 +584,20 @@ class CodeGenerationService(private val project: Project) {
             // 构建方法体
             val body = method.body ?: throw IllegalStateException("Method body is null")
 
-            if (fields.isEmpty()) {
+            if (preparedData.fieldNames.isEmpty()) {
                 // 没有字段，返回 0
                 body.add(factory.createStatementFromText("return 0;", method))
             } else {
                 // 使用 Objects.hash 方法
-                val fieldNames = fields.joinToString(", ") { it.name ?: "" }
+                val fieldNames = preparedData.fieldNames.joinToString(", ")
                 body.add(factory.createStatementFromText("return java.util.Objects.hash($fieldNames);", method))
             }
 
             // 添加到类中
             val addedMethod = psiClass.add(method) as PsiMethod
 
-            // 格式化代码
-            PsiHelper.reformatCode(project, addedMethod)
+            // 格式化代码（已在 WriteAction 中）
+            com.intellij.psi.codeStyle.CodeStyleManager.getInstance(project).reformat(addedMethod)
 
             addedMethod
         }
@@ -553,32 +621,44 @@ class CodeGenerationService(private val project: Project) {
     fun overrideMethod(request: OverrideMethodRequest): OverrideMethodResponse {
         logger.info("Overriding method: ${request.methodName} in file: ${request.filePath}")
 
-        val psiFile = ThreadHelper.runReadAction {
-            PsiHelper.findPsiFile(project, request.filePath)
+        // Phase 1: ReadAction - 收集所有需要的数据
+        data class ParameterInfo(
+            val name: String,
+            val typeCanonicalText: String
+        )
+
+        data class MethodInfo(
+            val name: String,
+            val returnTypeCanonicalText: String?,
+            val isReturnVoid: Boolean,
+            val isReturnPrimitive: Boolean,
+            val returnPrimitiveDefault: String,
+            val parameters: List<ParameterInfo>
+        )
+
+        data class PreparedData(
+            val offset: Int,
+            val methodToOverride: MethodInfo,
+            val isAlreadyOverridden: Boolean
+        )
+
+        val preparedData = ThreadHelper.runReadAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
-        }
 
-        val document = ThreadHelper.runReadAction {
-            PsiHelper.getDocument(psiFile)
+            val document = PsiHelper.getDocument(psiFile)
                 ?: throw IllegalStateException("Cannot get document")
-        }
 
-        val offset = request.offset ?: run {
-            OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
-                ?: throw IllegalArgumentException("Invalid line/column position")
-        }
+            val offset = request.offset ?: run {
+                OffsetHelper.lineColumnToOffset(document, request.line!!, request.column!!)
+                    ?: throw IllegalArgumentException("Invalid line/column position")
+            }
 
-        logger.info("Overriding method at offset: $offset")
-
-        // 查找光标所在的类
-        val psiClass = ThreadHelper.runReadAction {
+            // 查找光标所在的类
             val element = psiFile.findElementAt(offset)
-            PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
                 ?: throw IllegalArgumentException("No class found at offset: $offset")
-        }
 
-        // 查找要重写的方法
-        val methodToOverride = ThreadHelper.runReadAction {
             // 从父类和接口中查找方法
             val superMethods = mutableListOf<PsiMethod>()
 
@@ -600,7 +680,7 @@ class CodeGenerationService(private val project: Project) {
             }
 
             // 如果有多个重载，根据参数类型选择
-            if (request.parameterTypes.isNotEmpty()) {
+            val methodToOverride = if (request.parameterTypes.isNotEmpty()) {
                 superMethods.firstOrNull { method ->
                     val params = method.parameterList.parameters
                     params.size == request.parameterTypes.size &&
@@ -609,28 +689,71 @@ class CodeGenerationService(private val project: Project) {
                             }
                 } ?: superMethods.first()
             } else {
-                // 如果没有指定参数类型，选择第一个
                 superMethods.first()
             }
-        }
-
-        // 生成重写方法
-        val overriddenMethod = ThreadHelper.runWriteAction {
-            val factory = JavaPsiFacade.getElementFactory(project)
 
             // 检查是否已经重写
-            val existingMethod = psiClass.findMethodsBySignature(methodToOverride, false).firstOrNull()
-            if (existingMethod != null) {
-                throw IllegalStateException("Method '${request.methodName}' is already overridden in this class")
+            val isAlreadyOverridden = psiClass.findMethodsBySignature(methodToOverride, false).isNotEmpty()
+
+            // 收集方法信息
+            val returnType = methodToOverride.returnType
+            val isReturnVoid = returnType == PsiTypes.voidType() || returnType == null
+            val isReturnPrimitive = returnType is PsiPrimitiveType
+            val returnPrimitiveDefault = when (returnType) {
+                PsiTypes.booleanType() -> "false"
+                PsiTypes.intType(), PsiTypes.longType(), PsiTypes.shortType(), PsiTypes.byteType() -> "0"
+                PsiTypes.floatType() -> "0.0f"
+                PsiTypes.doubleType() -> "0.0"
+                PsiTypes.charType() -> "'\\u0000'"
+                else -> "null"
+            }
+
+            val parameters = methodToOverride.parameterList.parameters.map { param ->
+                ParameterInfo(param.name ?: "param", param.type.canonicalText)
+            }
+
+            val methodInfo = MethodInfo(
+                name = methodToOverride.name,
+                returnTypeCanonicalText = returnType?.canonicalText,
+                isReturnVoid = isReturnVoid,
+                isReturnPrimitive = isReturnPrimitive,
+                returnPrimitiveDefault = returnPrimitiveDefault,
+                parameters = parameters
+            )
+
+            PreparedData(offset, methodInfo, isAlreadyOverridden)
+        }
+
+        if (preparedData.isAlreadyOverridden) {
+            throw IllegalStateException("Method '${request.methodName}' is already overridden in this class")
+        }
+
+        logger.info("Overriding method at offset: ${preparedData.offset}")
+
+        // Phase 2: WriteAction - 生成方法（所有 PSI 操作在单个 WriteAction 中完成）
+        val overriddenMethod = ThreadHelper.runWriteAction {
+            val psiFile = PsiHelper.findPsiFile(project, request.filePath)!!
+            val element = psiFile.findElementAt(preparedData.offset)
+            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)!!
+
+            val factory = JavaPsiFacade.getElementFactory(project)
+            val methodInfo = preparedData.methodToOverride
+
+            // 创建返回类型
+            val returnType = if (methodInfo.returnTypeCanonicalText != null) {
+                factory.createTypeFromText(methodInfo.returnTypeCanonicalText, psiClass)
+            } else {
+                PsiTypes.voidType()
             }
 
             // 创建重写方法
-            val method = factory.createMethod(methodToOverride.name, methodToOverride.returnType ?: PsiTypes.voidType())
+            val method = factory.createMethod(methodInfo.name, returnType)
             method.modifierList.setModifierProperty(PsiModifier.PUBLIC, true)
 
-            // 复制参数
-            methodToOverride.parameterList.parameters.forEach { param ->
-                val parameter = factory.createParameter(param.name ?: "param", param.type)
+            // 添加参数
+            methodInfo.parameters.forEach { param ->
+                val paramType = factory.createTypeFromText(param.typeCanonicalText, psiClass)
+                val parameter = factory.createParameter(param.name, paramType)
                 method.parameterList.add(parameter)
             }
 
@@ -643,8 +766,8 @@ class CodeGenerationService(private val project: Project) {
 
             if (request.callSuper) {
                 // 调用父类方法
-                val paramNames = methodToOverride.parameterList.parameters.joinToString(", ") { it.name ?: "" }
-                val superCall = if (methodToOverride.returnType == PsiTypes.voidType() || methodToOverride.returnType == null) {
+                val paramNames = methodInfo.parameters.joinToString(", ") { it.name }
+                val superCall = if (methodInfo.isReturnVoid) {
                     factory.createStatementFromText("super.${request.methodName}($paramNames);", method)
                 } else {
                     factory.createStatementFromText("return super.${request.methodName}($paramNames);", method)
@@ -652,20 +775,11 @@ class CodeGenerationService(private val project: Project) {
                 body.add(superCall)
             } else {
                 // 生成默认实现
-                if (methodToOverride.returnType != PsiTypes.voidType() && methodToOverride.returnType != null) {
-                    val returnType = methodToOverride.returnType!!
-                    val defaultValue = when {
-                        returnType is PsiPrimitiveType -> {
-                            when (returnType) {
-                                PsiTypes.booleanType() -> "false"
-                                PsiTypes.intType(), PsiTypes.longType(), PsiTypes.shortType(), PsiTypes.byteType() -> "0"
-                                PsiTypes.floatType() -> "0.0f"
-                                PsiTypes.doubleType() -> "0.0"
-                                PsiTypes.charType() -> "'\\u0000'"
-                                else -> "null"
-                            }
-                        }
-                        else -> "null"
+                if (!methodInfo.isReturnVoid) {
+                    val defaultValue = if (methodInfo.isReturnPrimitive) {
+                        methodInfo.returnPrimitiveDefault
+                    } else {
+                        "null"
                     }
                     val returnStatement = factory.createStatementFromText("return $defaultValue;", method)
                     body.add(returnStatement)
@@ -675,8 +789,8 @@ class CodeGenerationService(private val project: Project) {
             // 添加到类中
             val addedMethod = psiClass.add(method) as PsiMethod
 
-            // 格式化代码
-            PsiHelper.reformatCode(project, addedMethod)
+            // 格式化代码（已在 WriteAction 中）
+            com.intellij.psi.codeStyle.CodeStyleManager.getInstance(project).reformat(addedMethod)
 
             addedMethod
         }

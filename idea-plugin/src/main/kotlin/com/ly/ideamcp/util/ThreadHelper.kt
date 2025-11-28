@@ -5,6 +5,7 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
+import com.ly.ideamcp.config.PluginSettings
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.CompletableFuture
@@ -15,6 +16,17 @@ import java.util.concurrent.ExecutionException
  * 处理 IDEA 的线程模型（ReadAction/WriteAction）
  */
 object ThreadHelper {
+
+    /**
+     * 获取配置的默认超时时间（秒）
+     */
+    private fun getDefaultTimeout(): Long {
+        return try {
+            PluginSettings.getInstance().requestTimeout.toLong()
+        } catch (e: Exception) {
+            30L // 回退默认值
+        }
+    }
 
     /**
      * 在读锁中执行操作
@@ -95,7 +107,7 @@ object ThreadHelper {
     fun <T> executeWithTimeout(
         project: Project?,
         title: String,
-        timeoutSeconds: Long = 30,
+        timeoutSeconds: Long = getDefaultTimeout(),
         action: (ProgressIndicator) -> T
     ): T {
         val future = executeAsync(project, title, true, action)
@@ -176,6 +188,64 @@ object ThreadHelper {
             action()
         } else {
             runWriteAction(action)
+        }
+    }
+
+    /**
+     * 带超时的读操作
+     * @param T 返回类型
+     * @param timeoutSeconds 超时时间（秒）
+     * @param action 要执行的操作
+     * @return 操作结果
+     * @throws TimeoutException 如果超时
+     */
+    fun <T> runReadActionWithTimeout(
+        timeoutSeconds: Long = getDefaultTimeout(),
+        action: () -> T
+    ): T {
+        val future = CompletableFuture.supplyAsync {
+            runReadAction(action)
+        }
+        return try {
+            future.get(timeoutSeconds, TimeUnit.SECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            future.cancel(true)
+            throw TimeoutException("Read operation timed out after $timeoutSeconds seconds")
+        } catch (e: ExecutionException) {
+            throw e.cause ?: e
+        }
+    }
+
+    /**
+     * 带超时的写操作
+     * @param T 返回类型
+     * @param timeoutSeconds 超时时间（秒）
+     * @param action 要执行的操作
+     * @return 操作结果
+     * @throws TimeoutException 如果超时
+     */
+    fun <T> runWriteActionWithTimeout(
+        timeoutSeconds: Long = getDefaultTimeout(),
+        action: () -> T
+    ): T {
+        val future = CompletableFuture<T>()
+
+        invokeLater {
+            try {
+                val result = runWriteAction(action)
+                future.complete(result)
+            } catch (e: Exception) {
+                future.completeExceptionally(e)
+            }
+        }
+
+        return try {
+            future.get(timeoutSeconds, TimeUnit.SECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            future.cancel(true)
+            throw TimeoutException("Write operation timed out after $timeoutSeconds seconds")
+        } catch (e: ExecutionException) {
+            throw e.cause ?: e
         }
     }
 }

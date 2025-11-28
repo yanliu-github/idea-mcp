@@ -57,7 +57,8 @@ intellij {
 // 依赖配置
 dependencies {
     // Kotlin 标准库
-    implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8")
+    // Kotlin 标准库由 IntelliJ Platform 提供，不需要显式依赖
+    // implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8")
 
     // HTTP Server - Undertow
     implementation("io.undertow:undertow-core:2.3.10.Final")

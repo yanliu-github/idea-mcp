@@ -64,7 +64,14 @@ class RefactoringService(private val project: Project) {
     fun renameSymbol(request: RenameRequest): RenameResponse {
         logger.info("Renaming symbol in file: ${request.filePath}, new name: ${request.newName}")
 
-        return ThreadHelper.runReadAction {
+        // 第一阶段：在 ReadAction 中收集所需数据
+        data class RenameData(
+            val targetElement: PsiNamedElement,
+            val oldName: String,
+            val filePath: String
+        )
+
+        val renameData = ThreadHelper.runReadAction {
             // 1. 查找 PSI 文件
             val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
@@ -97,36 +104,40 @@ class RefactoringService(private val project: Project) {
             val oldName = targetElement.name
                 ?: throw IllegalStateException("Element has no name")
 
-            // 6. 检查名称是否相同
-            if (oldName == request.newName) {
-                return@runReadAction RenameResponse(
-                    success = true,
-                    oldName = oldName,
-                    newName = request.newName,
-                    affectedFiles = 0,
-                    changes = emptyList(),
-                    preview = request.preview
-                )
-            }
+            RenameData(targetElement, oldName, psiFile.virtualFile.path)
+        }
 
-            // 7. 如果是预览模式，返回预计的变更
-            if (request.preview) {
-                return@runReadAction previewRename(targetElement, oldName, request.newName)
-            }
-
-            // 8. 执行重命名
-            executeRename(targetElement, request)
-
-            // 9. 返回成功响应（简化版）
-            RenameResponse(
+        // 6. 检查名称是否相同（无需锁）
+        if (renameData.oldName == request.newName) {
+            return RenameResponse(
                 success = true,
-                oldName = oldName,
+                oldName = renameData.oldName,
                 newName = request.newName,
-                affectedFiles = 1, // 简化：实际应该统计所有受影响的文件
-                changes = emptyList(), // 简化：实际应该收集所有变更
-                preview = false
+                affectedFiles = 0,
+                changes = emptyList(),
+                preview = request.preview
             )
         }
+
+        // 7. 如果是预览模式，在 ReadAction 中返回预计的变更
+        if (request.preview) {
+            return ThreadHelper.runReadAction {
+                previewRename(renameData.targetElement, renameData.oldName, request.newName)
+            }
+        }
+
+        // 8. 第二阶段：在 WriteAction 中执行重命名
+        executeRename(renameData.targetElement, request)
+
+        // 9. 返回成功响应（简化版）
+        return RenameResponse(
+            success = true,
+            oldName = renameData.oldName,
+            newName = request.newName,
+            affectedFiles = 1, // 简化：实际应该统计所有受影响的文件
+            changes = emptyList(), // 简化：实际应该收集所有变更
+            preview = false
+        )
     }
 
     /**
@@ -217,7 +228,15 @@ class RefactoringService(private val project: Project) {
     fun extractMethod(request: ExtractMethodRequest): ExtractMethodResponse {
         logger.info("Extracting method: ${request.methodName} from file: ${request.filePath}")
 
-        return ThreadHelper.runReadAction {
+        // 第一阶段：在 ReadAction 中收集所需数据
+        data class ExtractMethodData(
+            val psiFile: PsiFile,
+            val startOffset: Int,
+            val endOffset: Int,
+            val codeRange: CodeRange
+        )
+
+        val extractData = ThreadHelper.runReadAction {
             // 1. 查找 PSI 文件
             val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
@@ -260,40 +279,42 @@ class RefactoringService(private val project: Project) {
                 endColumn = endColumn
             )
 
-            // 6. 如果是预览模式，返回预览信息
-            if (request.preview) {
-                return@runReadAction ExtractMethodResponse(
-                    success = true,
-                    methodName = request.methodName,
-                    methodSignature = "${request.visibility} void ${request.methodName}()",
-                    extractedRange = codeRange,
-                    preview = true
-                )
-            }
+            ExtractMethodData(psiFile, startOffset, endOffset, codeRange)
+        }
 
-            // 7. 执行提取方法
-            executeExtractMethod(psiFile, startOffset, endOffset, request)
-
-            ExtractMethodResponse(
+        // 6. 如果是预览模式，直接返回预览信息（无需写操作）
+        if (request.preview) {
+            return ExtractMethodResponse(
                 success = true,
                 methodName = request.methodName,
                 methodSignature = "${request.visibility} void ${request.methodName}()",
-                extractedRange = codeRange,
-                methodLocation = CodeLocation(
-                    filePath = request.filePath,
-                    offset = startOffset
-                ),
-                affectedFiles = listOf(
-                    com.ly.ideamcp.model.refactor.FileChange(
-                        filePath = request.filePath,
-                        changes = emptyList()
-                    )
-                ),
-                preview = false,
-                parameters = emptyList(),
-                returnType = "void"
+                extractedRange = extractData.codeRange,
+                preview = true
             )
         }
+
+        // 7. 第二阶段：在 WriteAction 中执行提取方法
+        executeExtractMethod(extractData.psiFile, extractData.startOffset, extractData.endOffset, request)
+
+        return ExtractMethodResponse(
+            success = true,
+            methodName = request.methodName,
+            methodSignature = "${request.visibility} void ${request.methodName}()",
+            extractedRange = extractData.codeRange,
+            methodLocation = CodeLocation(
+                filePath = request.filePath,
+                offset = extractData.startOffset
+            ),
+            affectedFiles = listOf(
+                com.ly.ideamcp.model.refactor.FileChange(
+                    filePath = request.filePath,
+                    changes = emptyList()
+                )
+            ),
+            preview = false,
+            parameters = emptyList(),
+            returnType = "void"
+        )
     }
 
     /**
@@ -304,7 +325,15 @@ class RefactoringService(private val project: Project) {
     fun extractVariable(request: ExtractVariableRequest): ExtractVariableResponse {
         logger.info("Extracting variable: ${request.variableName} from file: ${request.filePath}")
 
-        return ThreadHelper.runReadAction {
+        // 第一阶段：在 ReadAction 中收集所需数据
+        data class ExtractVariableData(
+            val psiFile: PsiFile,
+            val startOffset: Int,
+            val endOffset: Int,
+            val expression: String
+        )
+
+        val extractData = ThreadHelper.runReadAction {
             val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
 
@@ -324,39 +353,42 @@ class RefactoringService(private val project: Project) {
             val expression = document.text.substring(startOffset, endOffset)
             logger.info("Extracting expression: $expression")
 
-            if (request.preview) {
-                return@runReadAction ExtractVariableResponse(
-                    success = true,
-                    variableName = request.variableName,
-                    variableType = "auto",
-                    extractedExpression = expression,
-                    replacementCount = 1,
-                    preview = true
-                )
-            }
+            ExtractVariableData(psiFile, startOffset, endOffset, expression)
+        }
 
-            // 执行提取变量
-            executeExtractVariable(psiFile, startOffset, endOffset, request)
-
-            ExtractVariableResponse(
+        // 如果是预览模式，直接返回（无需写操作）
+        if (request.preview) {
+            return ExtractVariableResponse(
                 success = true,
                 variableName = request.variableName,
                 variableType = "auto",
-                extractedExpression = expression,
-                declarationLocation = CodeLocation(
-                    filePath = request.filePath,
-                    offset = startOffset
-                ),
+                extractedExpression = extractData.expression,
                 replacementCount = 1,
-                affectedFiles = listOf(
-                    com.ly.ideamcp.model.refactor.FileChange(
-                        filePath = request.filePath,
-                        changes = emptyList()
-                    )
-                ),
-                preview = false
+                preview = true
             )
         }
+
+        // 第二阶段：在 WriteAction 中执行提取变量
+        executeExtractVariable(extractData.psiFile, extractData.startOffset, extractData.endOffset, request)
+
+        return ExtractVariableResponse(
+            success = true,
+            variableName = request.variableName,
+            variableType = "auto",
+            extractedExpression = extractData.expression,
+            declarationLocation = CodeLocation(
+                filePath = request.filePath,
+                offset = extractData.startOffset
+            ),
+            replacementCount = 1,
+            affectedFiles = listOf(
+                com.ly.ideamcp.model.refactor.FileChange(
+                    filePath = request.filePath,
+                    changes = emptyList()
+                )
+            ),
+            preview = false
+        )
     }
 
     /**
@@ -367,7 +399,14 @@ class RefactoringService(private val project: Project) {
     fun inlineVariable(request: InlineVariableRequest): InlineVariableResponse {
         logger.info("Inlining variable in file: ${request.filePath}")
 
-        return ThreadHelper.runReadAction {
+        // 第一阶段：在 ReadAction 中收集所需数据
+        data class InlineVariableData(
+            val psiFile: PsiFile,
+            val element: PsiElement,
+            val variableName: String
+        )
+
+        val inlineData = ThreadHelper.runReadAction {
             val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
 
@@ -389,33 +428,36 @@ class RefactoringService(private val project: Project) {
                 "unknown"
             }
 
-            if (request.preview) {
-                return@runReadAction InlineVariableResponse(
-                    success = true,
-                    variableName = variableName,
-                    inlinedExpression = "expression_value",
-                    replacementCount = 1,
-                    preview = true
-                )
-            }
+            InlineVariableData(psiFile, element, variableName)
+        }
 
-            // 执行内联变量
-            executeInlineVariable(element, psiFile)
-
-            InlineVariableResponse(
+        // 如果是预览模式，直接返回（无需写操作）
+        if (request.preview) {
+            return InlineVariableResponse(
                 success = true,
-                variableName = variableName,
+                variableName = inlineData.variableName,
                 inlinedExpression = "expression_value",
                 replacementCount = 1,
-                affectedFiles = listOf(
-                    com.ly.ideamcp.model.refactor.FileChange(
-                        filePath = request.filePath,
-                        changes = emptyList()
-                    )
-                ),
-                preview = false
+                preview = true
             )
         }
+
+        // 第二阶段：在 WriteAction 中执行内联变量
+        executeInlineVariable(inlineData.element, inlineData.psiFile)
+
+        return InlineVariableResponse(
+            success = true,
+            variableName = inlineData.variableName,
+            inlinedExpression = "expression_value",
+            replacementCount = 1,
+            affectedFiles = listOf(
+                com.ly.ideamcp.model.refactor.FileChange(
+                    filePath = request.filePath,
+                    changes = emptyList()
+                )
+            ),
+            preview = false
+        )
     }
 
     /**
@@ -426,7 +468,15 @@ class RefactoringService(private val project: Project) {
     fun changeSignature(request: ChangeSignatureRequest): ChangeSignatureResponse {
         logger.info("Changing signature in file: ${request.filePath}")
 
-        return ThreadHelper.runReadAction {
+        // 第一阶段：在 ReadAction 中收集所需数据
+        data class ChangeSignatureData(
+            val method: PsiMethod,
+            val methodName: String,
+            val oldSignature: String,
+            val newSignature: String
+        )
+
+        val changeData = ThreadHelper.runReadAction {
             val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
 
@@ -447,28 +497,29 @@ class RefactoringService(private val project: Project) {
 
             val methodName = method.name
             val oldSignature = buildMethodSignature(method)
-
-            if (!request.preview) {
-                // 执行修改签名
-                executeChangeSignature(method, request)
-            }
-
             val newSignature = buildNewSignature(method, request)
 
-            ChangeSignatureResponse(
-                success = true,
-                methodName = request.newName ?: methodName,
-                oldSignature = oldSignature,
-                newSignature = newSignature,
-                affectedFiles = listOf(
-                    com.ly.ideamcp.model.refactor.FileChange(
-                        filePath = request.filePath,
-                        changes = emptyList()
-                    )
-                ),
-                preview = request.preview
-            )
+            ChangeSignatureData(method, methodName, oldSignature, newSignature)
         }
+
+        // 如果不是预览模式，在 WriteAction 中执行修改签名
+        if (!request.preview) {
+            executeChangeSignature(changeData.method, request)
+        }
+
+        return ChangeSignatureResponse(
+            success = true,
+            methodName = request.newName ?: changeData.methodName,
+            oldSignature = changeData.oldSignature,
+            newSignature = changeData.newSignature,
+            affectedFiles = listOf(
+                com.ly.ideamcp.model.refactor.FileChange(
+                    filePath = request.filePath,
+                    changes = emptyList()
+                )
+            ),
+            preview = request.preview
+        )
     }
 
     /**
@@ -479,7 +530,14 @@ class RefactoringService(private val project: Project) {
     fun move(request: MoveRequest): MoveResponse {
         logger.info("Moving element in file: ${request.filePath} to: ${request.targetPath}")
 
-        return ThreadHelper.runReadAction {
+        // 第一阶段：在 ReadAction 中收集所需数据
+        data class MoveData(
+            val moveableElement: PsiElement,
+            val elementName: String,
+            val offset: Int
+        )
+
+        val moveData = ThreadHelper.runReadAction {
             val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
 
@@ -504,31 +562,33 @@ class RefactoringService(private val project: Project) {
                 "unknown"
             }
 
-            if (!request.preview) {
-                // 执行移动
-                executeMove(moveableElement, request)
-            }
-
-            MoveResponse(
-                success = true,
-                elementName = elementName,
-                sourceLocation = CodeLocation(
-                    filePath = request.filePath,
-                    offset = offset
-                ),
-                targetLocation = CodeLocation(
-                    filePath = request.targetPath,
-                    offset = 0
-                ),
-                affectedFiles = listOf(
-                    com.ly.ideamcp.model.refactor.FileChange(
-                        filePath = request.filePath,
-                        changes = emptyList()
-                    )
-                ),
-                preview = request.preview
-            )
+            MoveData(moveableElement, elementName, offset)
         }
+
+        // 如果不是预览模式，在 WriteAction 中执行移动
+        if (!request.preview) {
+            executeMove(moveData.moveableElement, request)
+        }
+
+        return MoveResponse(
+            success = true,
+            elementName = moveData.elementName,
+            sourceLocation = CodeLocation(
+                filePath = request.filePath,
+                offset = moveData.offset
+            ),
+            targetLocation = CodeLocation(
+                filePath = request.targetPath,
+                offset = 0
+            ),
+            affectedFiles = listOf(
+                com.ly.ideamcp.model.refactor.FileChange(
+                    filePath = request.filePath,
+                    changes = emptyList()
+                )
+            ),
+            preview = request.preview
+        )
     }
 
     /**
@@ -539,7 +599,8 @@ class RefactoringService(private val project: Project) {
     fun extractInterface(request: ExtractInterfaceRequest): ExtractInterfaceResponse {
         logger.info("Extracting interface: ${request.interfaceName} from file: ${request.filePath}")
 
-        return ThreadHelper.runReadAction {
+        // 第一阶段：在 ReadAction 中收集所需数据
+        val psiClass = ThreadHelper.runReadAction {
             val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
 
@@ -555,31 +616,31 @@ class RefactoringService(private val project: Project) {
                 ?: throw IllegalArgumentException("No element found at offset: $offset")
 
             // 查找类元素
-            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
+            PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
                 ?: throw IllegalArgumentException("No class found at offset: $offset")
-
-            if (!request.preview) {
-                // 执行提取接口
-                executeExtractInterface(psiClass, request)
-            }
-
-            ExtractInterfaceResponse(
-                success = true,
-                interfaceName = request.interfaceName,
-                interfaceLocation = CodeLocation(
-                    filePath = "${request.targetPackage ?: ""}/${request.interfaceName}.java",
-                    offset = 0
-                ),
-                extractedMembers = request.members ?: emptyList(),
-                affectedFiles = listOf(
-                    com.ly.ideamcp.model.refactor.FileChange(
-                        filePath = request.filePath,
-                        changes = emptyList()
-                    )
-                ),
-                preview = request.preview
-            )
         }
+
+        // 如果不是预览模式，在 WriteAction 中执行提取接口
+        if (!request.preview) {
+            executeExtractInterface(psiClass, request)
+        }
+
+        return ExtractInterfaceResponse(
+            success = true,
+            interfaceName = request.interfaceName,
+            interfaceLocation = CodeLocation(
+                filePath = "${request.targetPackage ?: ""}/${request.interfaceName}.java",
+                offset = 0
+            ),
+            extractedMembers = request.members ?: emptyList(),
+            affectedFiles = listOf(
+                com.ly.ideamcp.model.refactor.FileChange(
+                    filePath = request.filePath,
+                    changes = emptyList()
+                )
+            ),
+            preview = request.preview
+        )
     }
 
     /**
@@ -590,7 +651,8 @@ class RefactoringService(private val project: Project) {
     fun extractSuperclass(request: ExtractSuperclassRequest): ExtractSuperclassResponse {
         logger.info("Extracting superclass: ${request.superclassName} from file: ${request.filePath}")
 
-        return ThreadHelper.runReadAction {
+        // 第一阶段：在 ReadAction 中收集所需数据
+        val psiClass = ThreadHelper.runReadAction {
             val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
 
@@ -606,31 +668,31 @@ class RefactoringService(private val project: Project) {
                 ?: throw IllegalArgumentException("No element found at offset: $offset")
 
             // 查找类元素
-            val psiClass = PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
+            PsiTreeUtil.getParentOfType(element, PsiClass::class.java)
                 ?: throw IllegalArgumentException("No class found at offset: $offset")
-
-            if (!request.preview) {
-                // 执行提取父类
-                executeExtractSuperclass(psiClass, request)
-            }
-
-            ExtractSuperclassResponse(
-                success = true,
-                superclassName = request.superclassName,
-                superclassLocation = CodeLocation(
-                    filePath = "${request.targetPackage ?: ""}/${request.superclassName}.java",
-                    offset = 0
-                ),
-                extractedMembers = request.members ?: emptyList(),
-                affectedFiles = listOf(
-                    com.ly.ideamcp.model.refactor.FileChange(
-                        filePath = request.filePath,
-                        changes = emptyList()
-                    )
-                ),
-                preview = request.preview
-            )
         }
+
+        // 如果不是预览模式，在 WriteAction 中执行提取父类
+        if (!request.preview) {
+            executeExtractSuperclass(psiClass, request)
+        }
+
+        return ExtractSuperclassResponse(
+            success = true,
+            superclassName = request.superclassName,
+            superclassLocation = CodeLocation(
+                filePath = "${request.targetPackage ?: ""}/${request.superclassName}.java",
+                offset = 0
+            ),
+            extractedMembers = request.members ?: emptyList(),
+            affectedFiles = listOf(
+                com.ly.ideamcp.model.refactor.FileChange(
+                    filePath = request.filePath,
+                    changes = emptyList()
+                )
+            ),
+            preview = request.preview
+        )
     }
 
     /**
@@ -641,7 +703,14 @@ class RefactoringService(private val project: Project) {
     fun encapsulateField(request: EncapsulateFieldRequest): EncapsulateFieldResponse {
         logger.info("Encapsulating field in file: ${request.filePath}")
 
-        return ThreadHelper.runReadAction {
+        // 第一阶段：在 ReadAction 中收集所需数据
+        data class EncapsulateFieldData(
+            val field: PsiField,
+            val fieldName: String,
+            val offset: Int
+        )
+
+        val encapsulateData = ThreadHelper.runReadAction {
             val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
 
@@ -660,38 +729,38 @@ class RefactoringService(private val project: Project) {
             val field = PsiTreeUtil.getParentOfType(element, PsiField::class.java)
                 ?: throw IllegalArgumentException("No field found at offset: $offset")
 
-            val fieldName = field.name
-
-            if (!request.preview) {
-                // 执行封装字段
-                executeEncapsulateField(field, request)
-            }
-
-            val getterName = if (request.generateGetter) "get${fieldName.replaceFirstChar { it.uppercase() }}" else null
-            val setterName = if (request.generateSetter) "set${fieldName.replaceFirstChar { it.uppercase() }}" else null
-
-            EncapsulateFieldResponse(
-                success = true,
-                fieldName = fieldName,
-                getterName = getterName,
-                setterName = setterName,
-                getterLocation = if (getterName != null) CodeLocation(
-                    filePath = request.filePath,
-                    offset = offset
-                ) else null,
-                setterLocation = if (setterName != null) CodeLocation(
-                    filePath = request.filePath,
-                    offset = offset
-                ) else null,
-                affectedFiles = listOf(
-                    com.ly.ideamcp.model.refactor.FileChange(
-                        filePath = request.filePath,
-                        changes = emptyList()
-                    )
-                ),
-                preview = request.preview
-            )
+            EncapsulateFieldData(field, field.name, offset)
         }
+
+        // 如果不是预览模式，在 WriteAction 中执行封装字段
+        if (!request.preview) {
+            executeEncapsulateField(encapsulateData.field, request)
+        }
+
+        val getterName = if (request.generateGetter) "get${encapsulateData.fieldName.replaceFirstChar { it.uppercase() }}" else null
+        val setterName = if (request.generateSetter) "set${encapsulateData.fieldName.replaceFirstChar { it.uppercase() }}" else null
+
+        return EncapsulateFieldResponse(
+            success = true,
+            fieldName = encapsulateData.fieldName,
+            getterName = getterName,
+            setterName = setterName,
+            getterLocation = if (getterName != null) CodeLocation(
+                filePath = request.filePath,
+                offset = encapsulateData.offset
+            ) else null,
+            setterLocation = if (setterName != null) CodeLocation(
+                filePath = request.filePath,
+                offset = encapsulateData.offset
+            ) else null,
+            affectedFiles = listOf(
+                com.ly.ideamcp.model.refactor.FileChange(
+                    filePath = request.filePath,
+                    changes = emptyList()
+                )
+            ),
+            preview = request.preview
+        )
     }
 
     /**
@@ -702,7 +771,14 @@ class RefactoringService(private val project: Project) {
     fun introduceParameterObject(request: IntroduceParameterObjectRequest): IntroduceParameterObjectResponse {
         logger.info("Introducing parameter object: ${request.className} in file: ${request.filePath}")
 
-        return ThreadHelper.runReadAction {
+        // 第一阶段：在 ReadAction 中收集所需数据
+        data class IntroduceParameterObjectData(
+            val method: PsiMethod,
+            val methodName: String,
+            val oldSignature: String
+        )
+
+        val introduceData = ThreadHelper.runReadAction {
             val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
 
@@ -724,32 +800,34 @@ class RefactoringService(private val project: Project) {
             val methodName = method.name
             val oldSignature = buildMethodSignature(method)
 
-            if (!request.preview) {
-                // 执行引入参数对象
-                executeIntroduceParameterObject(method, request)
-            }
-
-            val newSignature = "void $methodName(${request.className} params)"
-
-            IntroduceParameterObjectResponse(
-                success = true,
-                className = request.className,
-                classLocation = CodeLocation(
-                    filePath = "${request.packageName ?: ""}/${request.className}.java",
-                    offset = 0
-                ),
-                methodName = methodName,
-                oldSignature = oldSignature,
-                newSignature = newSignature,
-                affectedFiles = listOf(
-                    com.ly.ideamcp.model.refactor.FileChange(
-                        filePath = request.filePath,
-                        changes = emptyList()
-                    )
-                ),
-                preview = request.preview
-            )
+            IntroduceParameterObjectData(method, methodName, oldSignature)
         }
+
+        // 如果不是预览模式，在 WriteAction 中执行引入参数对象
+        if (!request.preview) {
+            executeIntroduceParameterObject(introduceData.method, request)
+        }
+
+        val newSignature = "void ${introduceData.methodName}(${request.className} params)"
+
+        return IntroduceParameterObjectResponse(
+            success = true,
+            className = request.className,
+            classLocation = CodeLocation(
+                filePath = "${request.packageName ?: ""}/${request.className}.java",
+                offset = 0
+            ),
+            methodName = introduceData.methodName,
+            oldSignature = introduceData.oldSignature,
+            newSignature = newSignature,
+            affectedFiles = listOf(
+                com.ly.ideamcp.model.refactor.FileChange(
+                    filePath = request.filePath,
+                    changes = emptyList()
+                )
+            ),
+            preview = request.preview
+        )
     }
 
     // ============================================
@@ -767,9 +845,10 @@ class RefactoringService(private val project: Project) {
         request: ExtractMethodRequest
     ) {
         ThreadHelper.runWriteAction {
+            var editor: Editor? = null
             try {
                 // 创建临时编辑器以执行重构
-                val editor = createEditorForFile(psiFile)
+                editor = createEditorForFile(psiFile)
                 editor.selectionModel.setSelection(startOffset, endOffset)
 
                 // 使用 ExtractMethodHandler 执行重构
@@ -780,6 +859,9 @@ class RefactoringService(private val project: Project) {
             } catch (e: Exception) {
                 logger.error("Extract method failed", e)
                 throw IllegalStateException("Extract method failed: ${e.message}", e)
+            } finally {
+                // 释放编辑器资源
+                editor?.let { EditorFactory.getInstance().releaseEditor(it) }
             }
         }
     }
@@ -795,9 +877,10 @@ class RefactoringService(private val project: Project) {
         request: ExtractVariableRequest
     ) {
         ThreadHelper.runWriteAction {
+            var editor: Editor? = null
             try {
                 // 创建临时编辑器
-                val editor = createEditorForFile(psiFile)
+                editor = createEditorForFile(psiFile)
                 editor.selectionModel.setSelection(startOffset, endOffset)
 
                 // 使用 IntroduceVariableHandler 执行重构
@@ -808,6 +891,9 @@ class RefactoringService(private val project: Project) {
             } catch (e: Exception) {
                 logger.error("Extract variable failed", e)
                 throw IllegalStateException("Extract variable failed: ${e.message}", e)
+            } finally {
+                // 释放编辑器资源
+                editor?.let { EditorFactory.getInstance().releaseEditor(it) }
             }
         }
     }
@@ -818,6 +904,7 @@ class RefactoringService(private val project: Project) {
      */
     private fun executeInlineVariable(element: PsiElement, psiFile: PsiFile) {
         ThreadHelper.runWriteAction {
+            var editor: Editor? = null
             try {
                 // 查找变量声明
                 val variable = PsiTreeUtil.getParentOfType(element, PsiLocalVariable::class.java)
@@ -825,7 +912,7 @@ class RefactoringService(private val project: Project) {
                     ?: throw IllegalArgumentException("No variable found at element")
 
                 // 创建临时编辑器
-                val editor = createEditorForFile(psiFile)
+                editor = createEditorForFile(psiFile)
 
                 // 使用内联处理器
                 val handler = InlineRefactoringActionHandler()
@@ -835,6 +922,9 @@ class RefactoringService(private val project: Project) {
             } catch (e: Exception) {
                 logger.error("Inline variable failed", e)
                 throw IllegalStateException("Inline variable failed: ${e.message}", e)
+            } finally {
+                // 释放编辑器资源
+                editor?.let { EditorFactory.getInstance().releaseEditor(it) }
             }
         }
     }
@@ -845,9 +935,10 @@ class RefactoringService(private val project: Project) {
      */
     private fun executeChangeSignature(method: PsiMethod, request: ChangeSignatureRequest) {
         ThreadHelper.runWriteAction {
+            var editor: Editor? = null
             try {
                 // 创建临时编辑器
-                val editor = createEditorForFile(method.containingFile)
+                editor = createEditorForFile(method.containingFile)
 
                 // 使用 Java 的 ChangeSignatureHandler
                 val handler = com.intellij.refactoring.changeSignature.JavaChangeSignatureHandler()
@@ -857,6 +948,9 @@ class RefactoringService(private val project: Project) {
             } catch (e: Exception) {
                 logger.error("Change signature failed", e)
                 throw IllegalStateException("Change signature failed: ${e.message}", e)
+            } finally {
+                // 释放编辑器资源
+                editor?.let { EditorFactory.getInstance().releaseEditor(it) }
             }
         }
     }

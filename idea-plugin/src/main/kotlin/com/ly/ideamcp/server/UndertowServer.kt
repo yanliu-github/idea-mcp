@@ -74,15 +74,30 @@ class UndertowServer(
     /**
      * 重启服务器
      * @param handler HTTP 请求处理器
+     * @param async 是否异步重启（默认 false，同步等待端口释放）
      */
-    fun restart(handler: HttpHandler) {
+    fun restart(handler: HttpHandler, async: Boolean = false) {
         logger.info("Restarting IDEA MCP Server")
         if (isRunning) {
             stop()
         }
-        // 等待一小段时间确保端口释放
-        Thread.sleep(500)
-        start(handler)
+
+        if (async) {
+            // 异步重启：在后台线程中等待并启动
+            Thread {
+                try {
+                    Thread.sleep(500) // 等待端口释放
+                    start(handler)
+                } catch (e: Exception) {
+                    logger.error("Failed to restart server asynchronously", e)
+                }
+            }.start()
+        } else {
+            // 同步重启：等待端口释放后启动
+            // 注意：调用者需确保不在 EDT 中调用此方法
+            Thread.sleep(500)
+            start(handler)
+        }
     }
 
     /**

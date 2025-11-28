@@ -4,7 +4,7 @@
     <id>com.ly.ideamcp</id>
 
     <!-- 插件名称 -->
-    <name>IDEA MCP Server</name>
+    <name>MCP Server</name>
 
     <!-- 插件供应商 -->
     <vendor email="support@example.com" url="https://github.com/your-org/idea-mcp">

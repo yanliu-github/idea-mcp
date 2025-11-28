@@ -189,7 +189,9 @@ object PsiHelper {
      * @param element PSI 元素
      */
     fun reformatCode(project: Project, element: PsiElement) {
-        CodeStyleManager.getInstance(project).reformat(element)
+        ThreadHelper.ensureWriteAction {
+            CodeStyleManager.getInstance(project).reformat(element)
+        }
     }
 
     /**
@@ -198,6 +200,8 @@ object PsiHelper {
      * @param psiFile PSI 文件
      */
     fun reformatCode(project: Project, psiFile: PsiFile) {
-        CodeStyleManager.getInstance(project).reformat(psiFile)
+        ThreadHelper.ensureWriteAction {
+            CodeStyleManager.getInstance(project).reformat(psiFile)
+        }
     }
 }

@@ -11,6 +11,7 @@ import com.intellij.xdebugger.evaluation.EvaluationMode
 import com.intellij.xdebugger.frame.*
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.execution.*
 import com.intellij.execution.executors.DefaultDebugExecutor
 import com.intellij.execution.runners.ExecutionEnvironmentBuilder
@@ -60,7 +61,15 @@ class DebugService(private val project: Project) {
     fun setBreakpoint(request: BreakpointRequest): BreakpointResponse {
         logger.info("Setting breakpoint in file: ${request.filePath} at line: ${request.line}")
 
-        return ThreadHelper.runReadAction {
+        // Phase 1: ReadAction - 收集数据和验证
+        data class BreakpointData(
+            val virtualFileUrl: String,
+            val lineCount: Int,
+            val lineStartOffset: Int,
+            val breakpointType: XLineBreakpointType<*>
+        )
+
+        val breakpointData = ThreadHelper.runReadAction {
             // 1. 验证文件存在
             val psiFile = PsiHelper.findPsiFile(project, request.filePath)
                 ?: throw IllegalArgumentException("File not found: ${request.filePath}")
@@ -77,74 +86,76 @@ class DebugService(private val project: Project) {
             val virtualFile = LocalFileSystem.getInstance().findFileByPath(request.filePath)
                 ?: throw IllegalArgumentException("Virtual file not found: ${request.filePath}")
 
-            // 4. 获取断点管理器
-            val breakpointManager = XDebuggerManager.getInstance(project).breakpointManager
-
-            // 5. 查找行断点类型 - 使用 JavaLineBreakpointType
+            // 4. 查找行断点类型 - 使用 JavaLineBreakpointType
             val breakpointType = XBreakpointType.EXTENSION_POINT_NAME.extensionList
                 .filterIsInstance<XLineBreakpointType<*>>()
                 .firstOrNull { it.id == "java-line" }
                 ?: throw IllegalStateException("Cannot find line breakpoint type")
 
-            // 6. 创建断点
-            // 7. 在 Write Action 中添加断点
-            @Suppress("UNCHECKED_CAST")
-            val xBreakpoint = ApplicationManager.getApplication().runWriteAction<XLineBreakpoint<*>?> {
-                breakpointManager.addLineBreakpoint(
-                    breakpointType as XLineBreakpointType<XBreakpointProperties<*>>,
-                    virtualFile.url,
-                    request.line,
-                    breakpointType.createBreakpointProperties(virtualFile, request.line)
-                )
-            }
-
-            if (xBreakpoint == null) {
-                throw IllegalStateException("Failed to create breakpoint")
-            }
-
-            // 8. 设置断点条件
-            if (request.condition != null) {
-                xBreakpoint.conditionExpression = XDebuggerUtil.getInstance()
-                    .createExpression(request.condition, null, null, EvaluationMode.EXPRESSION)
-            }
-
-            // 9. 设置断点启用状态
-            xBreakpoint.isEnabled = request.enabled
-
-            // 10. 生成断点ID并存储
-            val breakpointId = UUID.randomUUID().toString()
-            val offset = document.getLineStartOffset(request.line)
-            val location = CodeLocation(
-                filePath = request.filePath,
-                offset = offset,
-                line = request.line,
-                column = 0
-            )
-
-            val breakpointInfo = BreakpointInfo(
-                breakpointId = breakpointId,
-                location = location,
-                type = if (request.logMessage != null) "log" else "line",
-                condition = request.condition,
-                logMessage = request.logMessage,
-                enabled = request.enabled,
-                verified = true
-            )
-
-            breakpoints[breakpointId] = breakpointInfo
-
-            logger.info("Breakpoint created successfully: $breakpointId at ${request.filePath}:${request.line}")
-
-            // 11. 返回响应
-            BreakpointResponse(
-                success = true,
-                breakpointId = breakpointId,
-                location = location,
-                type = breakpointInfo.type,
-                condition = request.condition,
-                enabled = request.enabled
+            BreakpointData(
+                virtualFileUrl = virtualFile.url,
+                lineCount = document.lineCount,
+                lineStartOffset = document.getLineStartOffset(request.line),
+                breakpointType = breakpointType
             )
         }
+
+        // Phase 2: WriteAction - 创建断点
+        @Suppress("UNCHECKED_CAST")
+        val xBreakpoint = ThreadHelper.runWriteAction {
+            val breakpointManager = XDebuggerManager.getInstance(project).breakpointManager
+            val virtualFile = VirtualFileManager.getInstance().findFileByUrl(breakpointData.virtualFileUrl)
+                ?: throw IllegalStateException("Virtual file not found: ${breakpointData.virtualFileUrl}")
+            breakpointManager.addLineBreakpoint(
+                breakpointData.breakpointType as XLineBreakpointType<XBreakpointProperties<*>>,
+                breakpointData.virtualFileUrl,
+                request.line,
+                breakpointData.breakpointType.createBreakpointProperties(
+                    virtualFile,
+                    request.line
+                )
+            )
+        } ?: throw IllegalStateException("Failed to create breakpoint")
+
+        // Phase 3: 设置断点属性（不需要持有读锁）
+        if (request.condition != null) {
+            xBreakpoint.conditionExpression = XDebuggerUtil.getInstance()
+                .createExpression(request.condition, null, null, EvaluationMode.EXPRESSION)
+        }
+        xBreakpoint.isEnabled = request.enabled
+
+        // Phase 4: 生成断点ID并存储
+        val breakpointId = UUID.randomUUID().toString()
+        val location = CodeLocation(
+            filePath = request.filePath,
+            offset = breakpointData.lineStartOffset,
+            line = request.line,
+            column = 0
+        )
+
+        val breakpointInfo = BreakpointInfo(
+            breakpointId = breakpointId,
+            location = location,
+            type = if (request.logMessage != null) "log" else "line",
+            condition = request.condition,
+            logMessage = request.logMessage,
+            enabled = request.enabled,
+            verified = true
+        )
+
+        breakpoints[breakpointId] = breakpointInfo
+
+        logger.info("Breakpoint created successfully: $breakpointId at ${request.filePath}:${request.line}")
+
+        // 返回响应
+        return BreakpointResponse(
+            success = true,
+            breakpointId = breakpointId,
+            location = location,
+            type = breakpointInfo.type,
+            condition = request.condition,
+            enabled = request.enabled
+        )
     }
 
     /**
@@ -154,21 +165,25 @@ class DebugService(private val project: Project) {
     fun listBreakpoints(): ListBreakpointsResponse {
         logger.info("Listing all breakpoints")
 
-        return ThreadHelper.runReadAction {
-            // 从断点管理器获取所有断点
+        // 注意：这里只是读取操作，不需要 ReadAction 包装整个方法
+        // 因为 breakpoints 是 ConcurrentHashMap，线程安全
+        // XDebuggerManager 的 breakpointManager.allBreakpoints 也是线程安全的
+
+        // 可选：在 ReadAction 中获取断点管理器的断点数量（用于日志）
+        val xDebuggerBreakpointCount = ThreadHelper.runReadAction {
             val breakpointManager = XDebuggerManager.getInstance(project).breakpointManager
-            val allBreakpoints = breakpointManager.allBreakpoints
-
-            logger.info("Found ${allBreakpoints.size} breakpoints from XDebuggerManager")
-
-            // 返回存储的断点信息
-            val breakpointList = breakpoints.values.toList()
-
-            ListBreakpointsResponse(
-                success = true,
-                breakpoints = breakpointList
-            )
+            breakpointManager.allBreakpoints.size
         }
+
+        logger.info("Found $xDebuggerBreakpointCount breakpoints from XDebuggerManager")
+
+        // 返回存储的断点信息（ConcurrentHashMap 线程安全）
+        val breakpointList = breakpoints.values.toList()
+
+        return ListBreakpointsResponse(
+            success = true,
+            breakpoints = breakpointList
+        )
     }
 
     /**
@@ -180,40 +195,48 @@ class DebugService(private val project: Project) {
     fun removeBreakpoint(breakpointId: String): RemoveBreakpointResponse {
         logger.info("Removing breakpoint: $breakpointId")
 
-        return ThreadHelper.runReadAction {
-            // 1. 获取断点信息
-            val breakpointInfo = breakpoints.remove(breakpointId)
-                ?: throw IllegalArgumentException("Breakpoint not found: $breakpointId")
+        // Phase 1: 从内部存储中移除断点信息（ConcurrentHashMap 原子操作）
+        val breakpointInfo = breakpoints.remove(breakpointId)
+            ?: throw IllegalArgumentException("Breakpoint not found: $breakpointId")
 
-            // 2. 从断点管理器中删除断点
-            val breakpointManager = XDebuggerManager.getInstance(project).breakpointManager
+        // Phase 2: ReadAction - 收集需要删除的 XBreakpoint
+        data class BreakpointToRemove(
+            val xBreakpoint: XLineBreakpoint<*>,
+            val fileUrl: String,
+            val line: Int
+        )
+
+        val breakpointsToRemove = ThreadHelper.runReadAction {
             val virtualFile = LocalFileSystem.getInstance().findFileByPath(breakpointInfo.location.filePath)
+                ?: return@runReadAction emptyList<BreakpointToRemove>()
 
-            if (virtualFile != null) {
-                ApplicationManager.getApplication().runWriteAction {
-                    // 查找并删除匹配的断点
-                    breakpointManager.allBreakpoints.forEach { xBreakpoint ->
-                        if (xBreakpoint is XLineBreakpoint<*>) {
-                            val breakpointUrl = xBreakpoint.fileUrl
-                            val breakpointLine = xBreakpoint.line
+            val breakpointManager = XDebuggerManager.getInstance(project).breakpointManager
+            breakpointManager.allBreakpoints
+                .filterIsInstance<XLineBreakpoint<*>>()
+                .filter { xBreakpoint ->
+                    xBreakpoint.fileUrl == virtualFile.url && xBreakpoint.line == breakpointInfo.location.line
+                }
+                .map { BreakpointToRemove(it, it.fileUrl, it.line) }
+        }
 
-                            if (breakpointUrl == virtualFile.url && breakpointLine == breakpointInfo.location.line) {
-                                breakpointManager.removeBreakpoint(xBreakpoint)
-                                logger.info("Removed XBreakpoint at ${breakpointInfo.location.filePath}:${breakpointInfo.location.line}")
-                            }
-                        }
-                    }
+        // Phase 3: WriteAction - 删除断点
+        if (breakpointsToRemove.isNotEmpty()) {
+            ThreadHelper.runWriteAction {
+                val breakpointManager = XDebuggerManager.getInstance(project).breakpointManager
+                breakpointsToRemove.forEach { toRemove ->
+                    breakpointManager.removeBreakpoint(toRemove.xBreakpoint)
+                    logger.info("Removed XBreakpoint at ${breakpointInfo.location.filePath}:${toRemove.line}")
                 }
             }
-
-            logger.info("Breakpoint removed successfully: $breakpointId")
-
-            RemoveBreakpointResponse(
-                success = true,
-                breakpointId = breakpointId,
-                message = "Breakpoint removed successfully"
-            )
         }
+
+        logger.info("Breakpoint removed successfully: $breakpointId")
+
+        return RemoveBreakpointResponse(
+            success = true,
+            breakpointId = breakpointId,
+            message = "Breakpoint removed successfully"
+        )
     }
 
     // ========== Phase 3.2: 调试会话管理 ==========
@@ -271,30 +294,28 @@ class DebugService(private val project: Project) {
     fun stopDebugSession(sessionId: String): DebugControlResponse {
         logger.info("Stopping debug session: $sessionId")
 
-        return ApplicationManager.getApplication().runReadAction<DebugControlResponse> {
-            val session = debugSessions[sessionId]
-                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+        // 使用原子操作获取并移除会话
+        val session = debugSessions.remove(sessionId)
+            ?: throw IllegalArgumentException("Debug session not found: $sessionId")
 
-            // 停止实际的调试会话(如果存在)
-            session.xDebugSession?.let { xSession ->
-                ApplicationManager.getApplication().invokeLater {
-                    xSession.stop()
-                }
+        // 更新状态（session 已从 map 中移除，不会有并发问题）
+        session.status = "stopped"
+
+        // 在 EDT 中停止调试会话（不阻塞等待）
+        session.xDebugSession?.let { xSession ->
+            ApplicationManager.getApplication().invokeLater {
+                xSession.stop()
             }
-
-            // 更新状态并移除会话
-            session.status = "stopped"
-            debugSessions.remove(sessionId)
-
-            logger.info("Debug session stopped: $sessionId")
-
-            DebugControlResponse(
-                success = true,
-                sessionId = sessionId,
-                status = "stopped",
-                currentLocation = null
-            )
         }
+
+        logger.info("Debug session stopped: $sessionId")
+
+        return DebugControlResponse(
+            success = true,
+            sessionId = sessionId,
+            status = "stopped",
+            currentLocation = null
+        )
     }
 
     /**
@@ -305,22 +326,22 @@ class DebugService(private val project: Project) {
     fun pauseDebugSession(sessionId: String): DebugControlResponse {
         logger.info("Pausing debug session: $sessionId")
 
-        return ApplicationManager.getApplication().runReadAction<DebugControlResponse> {
-            val session = debugSessions[sessionId]
-                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+        val session = debugSessions[sessionId]
+            ?: throw IllegalArgumentException("Debug session not found: $sessionId")
 
-            // 暂停实际的调试会话
-            session.xDebugSession?.let { xSession ->
-                ApplicationManager.getApplication().invokeLater {
-                    xSession.pause()
-                }
+        // 在 EDT 中暂停调试会话（不阻塞等待）
+        session.xDebugSession?.let { xSession ->
+            ApplicationManager.getApplication().invokeLater {
+                xSession.pause()
             }
+        }
 
-            // 更新状态
-            session.status = "paused"
+        // 更新状态
+        session.status = "paused"
 
-            // 获取当前位置
-            val currentLocation = session.xDebugSession?.currentStackFrame?.sourcePosition?.let { position ->
+        // 获取当前位置（在 ReadAction 中读取 PSI 数据）
+        val currentLocation = ThreadHelper.runReadAction {
+            session.xDebugSession?.currentStackFrame?.sourcePosition?.let { position ->
                 CodeLocation(
                     filePath = position.file.path,
                     offset = position.offset,
@@ -328,16 +349,16 @@ class DebugService(private val project: Project) {
                     column = 0
                 )
             }
-
-            logger.info("Debug session paused: $sessionId")
-
-            DebugControlResponse(
-                success = true,
-                sessionId = sessionId,
-                status = "paused",
-                currentLocation = currentLocation
-            )
         }
+
+        logger.info("Debug session paused: $sessionId")
+
+        return DebugControlResponse(
+            success = true,
+            sessionId = sessionId,
+            status = "paused",
+            currentLocation = currentLocation
+        )
     }
 
     /**
@@ -348,29 +369,27 @@ class DebugService(private val project: Project) {
     fun resumeDebugSession(sessionId: String): DebugControlResponse {
         logger.info("Resuming debug session: $sessionId")
 
-        return ApplicationManager.getApplication().runReadAction<DebugControlResponse> {
-            val session = debugSessions[sessionId]
-                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+        val session = debugSessions[sessionId]
+            ?: throw IllegalArgumentException("Debug session not found: $sessionId")
 
-            // 恢复实际的调试会话
-            session.xDebugSession?.let { xSession ->
-                ApplicationManager.getApplication().invokeLater {
-                    xSession.resume()
-                }
+        // 在 EDT 中恢复调试会话（不阻塞等待）
+        session.xDebugSession?.let { xSession ->
+            ApplicationManager.getApplication().invokeLater {
+                xSession.resume()
             }
-
-            // 更新状态
-            session.status = "running"
-
-            logger.info("Debug session resumed: $sessionId")
-
-            DebugControlResponse(
-                success = true,
-                sessionId = sessionId,
-                status = "running",
-                currentLocation = null
-            )
         }
+
+        // 更新状态
+        session.status = "running"
+
+        logger.info("Debug session resumed: $sessionId")
+
+        return DebugControlResponse(
+            success = true,
+            sessionId = sessionId,
+            status = "running",
+            currentLocation = null
+        )
     }
 
     /**
@@ -381,23 +400,23 @@ class DebugService(private val project: Project) {
     fun stepOver(sessionId: String): DebugControlResponse {
         logger.info("Step over in session: $sessionId")
 
-        return ApplicationManager.getApplication().runReadAction<DebugControlResponse> {
-            val session = debugSessions[sessionId]
-                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+        val session = debugSessions[sessionId]
+            ?: throw IllegalArgumentException("Debug session not found: $sessionId")
 
-            if (session.status != "paused") {
-                throw IllegalStateException("Debug session must be paused to step over")
+        if (session.status != "paused") {
+            throw IllegalStateException("Debug session must be paused to step over")
+        }
+
+        // 在 EDT 中执行步过操作（不阻塞等待）
+        session.xDebugSession?.let { xSession ->
+            ApplicationManager.getApplication().invokeLater {
+                xSession.stepOver(false)
             }
+        }
 
-            // 执行步过操作
-            session.xDebugSession?.let { xSession ->
-                ApplicationManager.getApplication().invokeLater {
-                    xSession.stepOver(false)
-                }
-            }
-
-            // 获取当前位置
-            val currentLocation = session.xDebugSession?.currentStackFrame?.sourcePosition?.let { position ->
+        // 获取当前位置（在 ReadAction 中读取 PSI 数据）
+        val currentLocation = ThreadHelper.runReadAction {
+            session.xDebugSession?.currentStackFrame?.sourcePosition?.let { position ->
                 CodeLocation(
                     filePath = position.file.path,
                     offset = position.offset,
@@ -405,16 +424,16 @@ class DebugService(private val project: Project) {
                     column = 0
                 )
             }
-
-            logger.info("Stepped over in session: $sessionId")
-
-            DebugControlResponse(
-                success = true,
-                sessionId = sessionId,
-                status = "paused",
-                currentLocation = currentLocation
-            )
         }
+
+        logger.info("Stepped over in session: $sessionId")
+
+        return DebugControlResponse(
+            success = true,
+            sessionId = sessionId,
+            status = "paused",
+            currentLocation = currentLocation
+        )
     }
 
     /**
@@ -425,23 +444,23 @@ class DebugService(private val project: Project) {
     fun stepInto(sessionId: String): DebugControlResponse {
         logger.info("Step into in session: $sessionId")
 
-        return ApplicationManager.getApplication().runReadAction<DebugControlResponse> {
-            val session = debugSessions[sessionId]
-                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+        val session = debugSessions[sessionId]
+            ?: throw IllegalArgumentException("Debug session not found: $sessionId")
 
-            if (session.status != "paused") {
-                throw IllegalStateException("Debug session must be paused to step into")
+        if (session.status != "paused") {
+            throw IllegalStateException("Debug session must be paused to step into")
+        }
+
+        // 在 EDT 中执行步入操作（不阻塞等待）
+        session.xDebugSession?.let { xSession ->
+            ApplicationManager.getApplication().invokeLater {
+                xSession.stepInto()
             }
+        }
 
-            // 执行步入操作
-            session.xDebugSession?.let { xSession ->
-                ApplicationManager.getApplication().invokeLater {
-                    xSession.stepInto()
-                }
-            }
-
-            // 获取当前位置
-            val currentLocation = session.xDebugSession?.currentStackFrame?.sourcePosition?.let { position ->
+        // 获取当前位置（在 ReadAction 中读取 PSI 数据）
+        val currentLocation = ThreadHelper.runReadAction {
+            session.xDebugSession?.currentStackFrame?.sourcePosition?.let { position ->
                 CodeLocation(
                     filePath = position.file.path,
                     offset = position.offset,
@@ -449,16 +468,16 @@ class DebugService(private val project: Project) {
                     column = 0
                 )
             }
-
-            logger.info("Stepped into in session: $sessionId")
-
-            DebugControlResponse(
-                success = true,
-                sessionId = sessionId,
-                status = "paused",
-                currentLocation = currentLocation
-            )
         }
+
+        logger.info("Stepped into in session: $sessionId")
+
+        return DebugControlResponse(
+            success = true,
+            sessionId = sessionId,
+            status = "paused",
+            currentLocation = currentLocation
+        )
     }
 
     /**
@@ -469,23 +488,23 @@ class DebugService(private val project: Project) {
     fun stepOut(sessionId: String): DebugControlResponse {
         logger.info("Step out in session: $sessionId")
 
-        return ApplicationManager.getApplication().runReadAction<DebugControlResponse> {
-            val session = debugSessions[sessionId]
-                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+        val session = debugSessions[sessionId]
+            ?: throw IllegalArgumentException("Debug session not found: $sessionId")
 
-            if (session.status != "paused") {
-                throw IllegalStateException("Debug session must be paused to step out")
+        if (session.status != "paused") {
+            throw IllegalStateException("Debug session must be paused to step out")
+        }
+
+        // 在 EDT 中执行步出操作（不阻塞等待）
+        session.xDebugSession?.let { xSession ->
+            ApplicationManager.getApplication().invokeLater {
+                xSession.stepOut()
             }
+        }
 
-            // 执行步出操作
-            session.xDebugSession?.let { xSession ->
-                ApplicationManager.getApplication().invokeLater {
-                    xSession.stepOut()
-                }
-            }
-
-            // 获取当前位置
-            val currentLocation = session.xDebugSession?.currentStackFrame?.sourcePosition?.let { position ->
+        // 获取当前位置（在 ReadAction 中读取 PSI 数据）
+        val currentLocation = ThreadHelper.runReadAction {
+            session.xDebugSession?.currentStackFrame?.sourcePosition?.let { position ->
                 CodeLocation(
                     filePath = position.file.path,
                     offset = position.offset,
@@ -493,16 +512,16 @@ class DebugService(private val project: Project) {
                     column = 0
                 )
             }
-
-            logger.info("Stepped out in session: $sessionId")
-
-            DebugControlResponse(
-                success = true,
-                sessionId = sessionId,
-                status = "paused",
-                currentLocation = currentLocation
-            )
         }
+
+        logger.info("Stepped out in session: $sessionId")
+
+        return DebugControlResponse(
+            success = true,
+            sessionId = sessionId,
+            status = "paused",
+            currentLocation = currentLocation
+        )
     }
 
     // ========== Phase 3.3: 表达式和变量 ==========
@@ -515,87 +534,85 @@ class DebugService(private val project: Project) {
     fun evaluateExpression(request: EvaluateExpressionRequest): EvaluateExpressionResponse {
         logger.info("Evaluating expression in session: ${request.sessionId}")
 
-        return ApplicationManager.getApplication().runReadAction<EvaluateExpressionResponse> {
-            val session = debugSessions[request.sessionId]
-                ?: throw IllegalArgumentException("Debug session not found: ${request.sessionId}")
+        val session = debugSessions[request.sessionId]
+            ?: throw IllegalArgumentException("Debug session not found: ${request.sessionId}")
 
-            if (session.status != "paused") {
-                throw IllegalStateException("Debug session must be paused to evaluate expressions")
-            }
+        if (session.status != "paused") {
+            throw IllegalStateException("Debug session must be paused to evaluate expressions")
+        }
 
-            val xSession = session.xDebugSession
-                ?: return@runReadAction EvaluateExpressionResponse(
-                    success = false,
-                    value = "",
-                    type = "",
-                    error = "No active debug session"
-                )
+        val xSession = session.xDebugSession
+            ?: return EvaluateExpressionResponse(
+                success = false,
+                value = "",
+                type = "",
+                error = "No active debug session"
+            )
 
-            // 获取当前栈帧
-            val stackFrame = xSession.currentStackFrame
-                ?: return@runReadAction EvaluateExpressionResponse(
-                    success = false,
-                    value = "",
-                    type = "",
-                    error = "No current stack frame"
-                )
+        // 获取当前栈帧
+        val stackFrame = xSession.currentStackFrame
+            ?: return EvaluateExpressionResponse(
+                success = false,
+                value = "",
+                type = "",
+                error = "No current stack frame"
+            )
 
-            // 获取求值器
-            val evaluator = stackFrame.evaluator
-                ?: return@runReadAction EvaluateExpressionResponse(
-                    success = false,
-                    value = "",
-                    type = "",
-                    error = "Evaluator not available"
-                )
+        // 获取求值器
+        val evaluator = stackFrame.evaluator
+            ?: return EvaluateExpressionResponse(
+                success = false,
+                value = "",
+                type = "",
+                error = "Evaluator not available"
+            )
 
-            // 创建求值结果容器
-            val result = CompletableFuture<EvaluateExpressionResponse>()
+        // 创建求值结果容器
+        val result = CompletableFuture<EvaluateExpressionResponse>()
 
-            // 异步求值
-            ApplicationManager.getApplication().invokeLater {
-                evaluator.evaluate(
-                    request.expression,
-                    object : XDebuggerEvaluator.XEvaluationCallback {
-                        override fun evaluated(xValue: XValue) {
-                            // 简化实现:直接返回表达式作为结果
-                            result.complete(
-                                EvaluateExpressionResponse(
-                                    success = true,
-                                    value = request.expression,
-                                    type = "evaluated",
-                                    error = null
-                                )
+        // 在 EDT 中异步求值
+        ApplicationManager.getApplication().invokeLater {
+            evaluator.evaluate(
+                request.expression,
+                object : XDebuggerEvaluator.XEvaluationCallback {
+                    override fun evaluated(xValue: XValue) {
+                        // 简化实现:直接返回表达式作为结果
+                        result.complete(
+                            EvaluateExpressionResponse(
+                                success = true,
+                                value = request.expression,
+                                type = "evaluated",
+                                error = null
                             )
-                        }
+                        )
+                    }
 
-                        override fun errorOccurred(errorMessage: String) {
-                            result.complete(
-                                EvaluateExpressionResponse(
-                                    success = false,
-                                    value = "",
-                                    type = "",
-                                    error = errorMessage
-                                )
+                    override fun errorOccurred(errorMessage: String) {
+                        result.complete(
+                            EvaluateExpressionResponse(
+                                success = false,
+                                value = "",
+                                type = "",
+                                error = errorMessage
                             )
-                        }
-                    },
-                    null
-                )
-            }
+                        )
+                    }
+                },
+                null
+            )
+        }
 
-            // 等待求值结果 (超时 5 秒)
-            try {
-                result.get(5, TimeUnit.SECONDS)
-            } catch (e: Exception) {
-                logger.error("Expression evaluation timeout or error", e)
-                EvaluateExpressionResponse(
-                    success = false,
-                    value = "",
-                    type = "",
-                    error = "Evaluation timeout: ${e.message}"
-                )
-            }
+        // 等待求值结果 (超时 5 秒) - 注意：不在 ReadAction 中阻塞
+        return try {
+            result.get(5, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            logger.error("Expression evaluation timeout or error", e)
+            EvaluateExpressionResponse(
+                success = false,
+                value = "",
+                type = "",
+                error = "Evaluation timeout: ${e.message}"
+            )
         }
     }
 
@@ -607,99 +624,97 @@ class DebugService(private val project: Project) {
     fun getVariables(request: GetVariablesRequest): GetVariablesResponse {
         logger.info("Getting variables in session: ${request.sessionId}")
 
-        return ApplicationManager.getApplication().runReadAction<GetVariablesResponse> {
-            val session = debugSessions[request.sessionId]
-                ?: throw IllegalArgumentException("Debug session not found: ${request.sessionId}")
+        val session = debugSessions[request.sessionId]
+            ?: throw IllegalArgumentException("Debug session not found: ${request.sessionId}")
 
-            if (session.status != "paused") {
-                throw IllegalStateException("Debug session must be paused to get variables")
-            }
-
-            val xSession = session.xDebugSession
-                ?: return@runReadAction GetVariablesResponse(
-                    success = false,
-                    variables = emptyList()
-                )
-
-            // 获取当前栈帧
-            val stackFrame = xSession.currentStackFrame
-                ?: return@runReadAction GetVariablesResponse(
-                    success = false,
-                    variables = emptyList()
-                )
-
-            // 创建变量列表容器
-            val variables = mutableListOf<VariableInfo>()
-            val latch = java.util.concurrent.CountDownLatch(1)
-
-            // 异步获取变量
-            ApplicationManager.getApplication().invokeLater {
-                stackFrame.computeChildren(object : XCompositeNode {
-                    override fun addChildren(children: XValueChildrenList, last: Boolean) {
-                        // 遍历所有变量
-                        for (i in 0 until children.size()) {
-                            val name = children.getName(i)
-                            val xValue = children.getValue(i)
-
-                            // 简化实现:直接使用变量名作为值
-                            variables.add(
-                                VariableInfo(
-                                    name = name,
-                                    value = "<value>",
-                                    type = "variable",
-                                    scope = request.scope ?: "local",
-                                    children = null
-                                )
-                            )
-                        }
-
-                        if (last) {
-                            latch.countDown()
-                        }
-                    }
-
-                    override fun tooManyChildren(remaining: Int) {
-                        latch.countDown()
-                    }
-
-                    override fun setMessage(
-                        message: String,
-                        icon: javax.swing.Icon?,
-                        attributes: com.intellij.ui.SimpleTextAttributes,
-                        link: com.intellij.xdebugger.frame.XDebuggerTreeNodeHyperlink?
-                    ) {
-                        logger.error("Error getting variables: $message")
-                        latch.countDown()
-                    }
-
-                    override fun setErrorMessage(errorMessage: String) {
-                        logger.error("Error getting variables: $errorMessage")
-                        latch.countDown()
-                    }
-
-                    override fun setErrorMessage(errorMessage: String, link: com.intellij.xdebugger.frame.XDebuggerTreeNodeHyperlink?) {
-                        setErrorMessage(errorMessage)
-                    }
-
-                    override fun setAlreadySorted(alreadySorted: Boolean) {}
-                    override fun isObsolete(): Boolean = false
-                })
-            }
-
-            // 等待变量获取完成 (超时 5 秒)
-            try {
-                latch.await(5, TimeUnit.SECONDS)
-            } catch (e: InterruptedException) {
-                logger.error("Get variables timeout", e)
-            }
-
-            logger.info("Retrieved ${variables.size} variables")
-
-            GetVariablesResponse(
-                success = true,
-                variables = variables
-            )
+        if (session.status != "paused") {
+            throw IllegalStateException("Debug session must be paused to get variables")
         }
+
+        val xSession = session.xDebugSession
+            ?: return GetVariablesResponse(
+                success = false,
+                variables = emptyList()
+            )
+
+        // 获取当前栈帧
+        val stackFrame = xSession.currentStackFrame
+            ?: return GetVariablesResponse(
+                success = false,
+                variables = emptyList()
+            )
+
+        // 创建变量列表容器
+        val variables = mutableListOf<VariableInfo>()
+        val latch = java.util.concurrent.CountDownLatch(1)
+
+        // 在 EDT 中异步获取变量
+        ApplicationManager.getApplication().invokeLater {
+            stackFrame.computeChildren(object : XCompositeNode {
+                override fun addChildren(children: XValueChildrenList, last: Boolean) {
+                    // 遍历所有变量
+                    for (i in 0 until children.size()) {
+                        val name = children.getName(i)
+                        val xValue = children.getValue(i)
+
+                        // 简化实现:直接使用变量名作为值
+                        variables.add(
+                            VariableInfo(
+                                name = name,
+                                value = "<value>",
+                                type = "variable",
+                                scope = request.scope ?: "local",
+                                children = null
+                            )
+                        )
+                    }
+
+                    if (last) {
+                        latch.countDown()
+                    }
+                }
+
+                override fun tooManyChildren(remaining: Int) {
+                    latch.countDown()
+                }
+
+                override fun setMessage(
+                    message: String,
+                    icon: javax.swing.Icon?,
+                    attributes: com.intellij.ui.SimpleTextAttributes,
+                    link: com.intellij.xdebugger.frame.XDebuggerTreeNodeHyperlink?
+                ) {
+                    logger.error("Error getting variables: $message")
+                    latch.countDown()
+                }
+
+                override fun setErrorMessage(errorMessage: String) {
+                    logger.error("Error getting variables: $errorMessage")
+                    latch.countDown()
+                }
+
+                override fun setErrorMessage(errorMessage: String, link: com.intellij.xdebugger.frame.XDebuggerTreeNodeHyperlink?) {
+                    setErrorMessage(errorMessage)
+                }
+
+                override fun setAlreadySorted(alreadySorted: Boolean) {}
+                override fun isObsolete(): Boolean = false
+            })
+        }
+
+        // 等待变量获取完成 (超时 5 秒) - 注意：不在 ReadAction 中阻塞
+        try {
+            latch.await(5, TimeUnit.SECONDS)
+        } catch (e: InterruptedException) {
+            logger.error("Get variables timeout", e)
+        }
+
+        logger.info("Retrieved ${variables.size} variables")
+
+        return GetVariablesResponse(
+            success = true,
+            variables = variables
+        )
     }
 
     /**
@@ -711,92 +726,90 @@ class DebugService(private val project: Project) {
     fun getVariable(sessionId: String, variableName: String): VariableInfo {
         logger.info("Getting variable '$variableName' in session: $sessionId")
 
-        return ApplicationManager.getApplication().runReadAction<VariableInfo> {
-            val session = debugSessions[sessionId]
-                ?: throw IllegalArgumentException("Debug session not found: $sessionId")
+        val session = debugSessions[sessionId]
+            ?: throw IllegalArgumentException("Debug session not found: $sessionId")
 
-            if (session.status != "paused") {
-                throw IllegalStateException("Debug session must be paused to get variable")
-            }
+        if (session.status != "paused") {
+            throw IllegalStateException("Debug session must be paused to get variable")
+        }
 
-            val xSession = session.xDebugSession
-                ?: throw IllegalStateException("No active debug session")
+        val xSession = session.xDebugSession
+            ?: throw IllegalStateException("No active debug session")
 
-            // 获取当前栈帧
-            val stackFrame = xSession.currentStackFrame
-                ?: throw IllegalStateException("No current stack frame")
+        // 获取当前栈帧
+        val stackFrame = xSession.currentStackFrame
+            ?: throw IllegalStateException("No current stack frame")
 
-            // 创建变量信息容器
-            val result = CompletableFuture<VariableInfo>()
+        // 创建变量信息容器
+        val result = CompletableFuture<VariableInfo>()
 
-            // 异步查找变量
-            ApplicationManager.getApplication().invokeLater {
-                stackFrame.computeChildren(object : XCompositeNode {
-                    override fun addChildren(children: XValueChildrenList, last: Boolean) {
-                        // 查找指定变量
-                        for (i in 0 until children.size()) {
-                            val name = children.getName(i)
-                            if (name == variableName) {
-                                // 简化实现:直接返回变量信息
-                                result.complete(
-                                    VariableInfo(
-                                        name = name,
-                                        value = "<value>",
-                                        type = "variable",
-                                        scope = "local",
-                                        children = null
-                                    )
+        // 在 EDT 中异步查找变量
+        ApplicationManager.getApplication().invokeLater {
+            stackFrame.computeChildren(object : XCompositeNode {
+                override fun addChildren(children: XValueChildrenList, last: Boolean) {
+                    // 查找指定变量
+                    for (i in 0 until children.size()) {
+                        val name = children.getName(i)
+                        if (name == variableName) {
+                            // 简化实现:直接返回变量信息
+                            result.complete(
+                                VariableInfo(
+                                    name = name,
+                                    value = "<value>",
+                                    type = "variable",
+                                    scope = "local",
+                                    children = null
                                 )
-                                return@addChildren
-                            }
-                        }
-
-                        if (last && !result.isDone) {
-                            result.completeExceptionally(
-                                IllegalArgumentException("Variable not found: $variableName")
                             )
+                            return@addChildren
                         }
                     }
 
-                    override fun tooManyChildren(remaining: Int) {
+                    if (last && !result.isDone) {
                         result.completeExceptionally(
-                            IllegalStateException("Too many children to search")
+                            IllegalArgumentException("Variable not found: $variableName")
                         )
                     }
+                }
 
-                    override fun setMessage(
-                        message: String,
-                        icon: javax.swing.Icon?,
-                        attributes: com.intellij.ui.SimpleTextAttributes,
-                        link: com.intellij.xdebugger.frame.XDebuggerTreeNodeHyperlink?
-                    ) {
-                        result.completeExceptionally(
-                            IllegalStateException("Error getting variables: $message")
-                        )
-                    }
+                override fun tooManyChildren(remaining: Int) {
+                    result.completeExceptionally(
+                        IllegalStateException("Too many children to search")
+                    )
+                }
 
-                    override fun setErrorMessage(errorMessage: String) {
-                        result.completeExceptionally(
-                            IllegalStateException("Error getting variables: $errorMessage")
-                        )
-                    }
+                override fun setMessage(
+                    message: String,
+                    icon: javax.swing.Icon?,
+                    attributes: com.intellij.ui.SimpleTextAttributes,
+                    link: com.intellij.xdebugger.frame.XDebuggerTreeNodeHyperlink?
+                ) {
+                    result.completeExceptionally(
+                        IllegalStateException("Error getting variables: $message")
+                    )
+                }
 
-                    override fun setErrorMessage(errorMessage: String, link: com.intellij.xdebugger.frame.XDebuggerTreeNodeHyperlink?) {
-                        setErrorMessage(errorMessage)
-                    }
+                override fun setErrorMessage(errorMessage: String) {
+                    result.completeExceptionally(
+                        IllegalStateException("Error getting variables: $errorMessage")
+                    )
+                }
 
-                    override fun setAlreadySorted(alreadySorted: Boolean) {}
-                    override fun isObsolete(): Boolean = false
-                })
-            }
+                override fun setErrorMessage(errorMessage: String, link: com.intellij.xdebugger.frame.XDebuggerTreeNodeHyperlink?) {
+                    setErrorMessage(errorMessage)
+                }
 
-            // 等待结果 (超时 5 秒)
-            try {
-                result.get(5, TimeUnit.SECONDS)
-            } catch (e: Exception) {
-                logger.error("Get variable timeout or error", e)
-                throw IllegalStateException("Failed to get variable: ${e.message}", e)
-            }
+                override fun setAlreadySorted(alreadySorted: Boolean) {}
+                override fun isObsolete(): Boolean = false
+            })
+        }
+
+        // 等待结果 (超时 5 秒) - 注意：不在 ReadAction 中阻塞
+        return try {
+            result.get(5, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            logger.error("Get variable timeout or error", e)
+            throw IllegalStateException("Failed to get variable: ${e.message}", e)
         }
     }
 
@@ -810,98 +823,96 @@ class DebugService(private val project: Project) {
     fun getCallStack(request: GetCallStackRequest): GetCallStackResponse {
         logger.info("Getting call stack for session: ${request.sessionId}")
 
-        return ApplicationManager.getApplication().runReadAction<GetCallStackResponse> {
-            val session = debugSessions[request.sessionId]
-                ?: throw IllegalArgumentException("Debug session not found: ${request.sessionId}")
+        val session = debugSessions[request.sessionId]
+            ?: throw IllegalArgumentException("Debug session not found: ${request.sessionId}")
 
-            if (session.status != "paused") {
-                throw IllegalStateException("Debug session must be paused to get call stack")
-            }
+        if (session.status != "paused") {
+            throw IllegalStateException("Debug session must be paused to get call stack")
+        }
 
-            val xSession = session.xDebugSession
-                ?: return@runReadAction GetCallStackResponse(
-                    success = false,
-                    frames = emptyList()
-                )
+        val xSession = session.xDebugSession
+            ?: return GetCallStackResponse(
+                success = false,
+                frames = emptyList()
+            )
 
-            // 获取挂起上下文
-            val suspendContext = xSession.suspendContext
-                ?: return@runReadAction GetCallStackResponse(
-                    success = false,
-                    frames = emptyList()
-                )
+        // 获取挂起上下文
+        val suspendContext = xSession.suspendContext
+            ?: return GetCallStackResponse(
+                success = false,
+                frames = emptyList()
+            )
 
-            // 获取执行栈
-            val executionStack = suspendContext.activeExecutionStack
-                ?: return@runReadAction GetCallStackResponse(
-                    success = false,
-                    frames = emptyList()
-                )
+        // 获取执行栈
+        val executionStack = suspendContext.activeExecutionStack
+            ?: return GetCallStackResponse(
+                success = false,
+                frames = emptyList()
+            )
 
-            // 创建栈帧列表容器
-            val frames = mutableListOf<StackFrame>()
-            val latch = java.util.concurrent.CountDownLatch(1)
+        // 创建栈帧列表容器
+        val frames = mutableListOf<StackFrame>()
+        val latch = java.util.concurrent.CountDownLatch(1)
 
-            // 异步获取栈帧
-            ApplicationManager.getApplication().invokeLater {
-                executionStack.computeStackFrames(0, object : XExecutionStack.XStackFrameContainer {
-                    override fun addStackFrames(stackFrames: List<XStackFrame>, last: Boolean) {
-                        stackFrames.forEachIndexed { index, xStackFrame ->
-                            val position = xStackFrame.sourcePosition
+        // 在 EDT 中异步获取栈帧
+        ApplicationManager.getApplication().invokeLater {
+            executionStack.computeStackFrames(0, object : XExecutionStack.XStackFrameContainer {
+                override fun addStackFrames(stackFrames: List<XStackFrame>, last: Boolean) {
+                    stackFrames.forEachIndexed { index, xStackFrame ->
+                        val position = xStackFrame.sourcePosition
 
-                            // 创建栈帧位置
-                            val location = position?.let {
-                                CodeLocation(
-                                    filePath = it.file.path,
-                                    offset = it.offset,
-                                    line = it.line,
-                                    column = 0
-                                )
-                            }
-
-                            // 获取栈帧的简化变量列表(暂不获取详细变量,避免过度复杂)
-                            val stackFrame = StackFrame(
-                                frameIndex = index,
-                                methodName = extractMethodName(xStackFrame),
-                                className = extractClassName(xStackFrame),
-                                location = location ?: CodeLocation(
-                                    filePath = "",
-                                    offset = 0,
-                                    line = 0,
-                                    column = 0
-                                ),
-                                variables = emptyList() // 可选: 可以进一步获取每个栈帧的变量
+                        // 创建栈帧位置
+                        val location = position?.let {
+                            CodeLocation(
+                                filePath = it.file.path,
+                                offset = it.offset,
+                                line = it.line,
+                                column = 0
                             )
-
-                            frames.add(stackFrame)
                         }
 
-                        if (last) {
-                            latch.countDown()
-                        }
+                        // 获取栈帧的简化变量列表(暂不获取详细变量,避免过度复杂)
+                        val stackFrame = StackFrame(
+                            frameIndex = index,
+                            methodName = extractMethodName(xStackFrame),
+                            className = extractClassName(xStackFrame),
+                            location = location ?: CodeLocation(
+                                filePath = "",
+                                offset = 0,
+                                line = 0,
+                                column = 0
+                            ),
+                            variables = emptyList() // 可选: 可以进一步获取每个栈帧的变量
+                        )
+
+                        frames.add(stackFrame)
                     }
 
-                    override fun errorOccurred(errorMessage: String) {
-                        logger.error("Error getting call stack: $errorMessage")
+                    if (last) {
                         latch.countDown()
                     }
-                })
-            }
+                }
 
-            // 等待栈帧获取完成 (超时 5 秒)
-            try {
-                latch.await(5, TimeUnit.SECONDS)
-            } catch (e: InterruptedException) {
-                logger.error("Get call stack timeout", e)
-            }
-
-            logger.info("Retrieved ${frames.size} stack frames")
-
-            GetCallStackResponse(
-                success = true,
-                frames = frames
-            )
+                override fun errorOccurred(errorMessage: String) {
+                    logger.error("Error getting call stack: $errorMessage")
+                    latch.countDown()
+                }
+            })
         }
+
+        // 等待栈帧获取完成 (超时 5 秒) - 注意：不在 ReadAction 中阻塞
+        try {
+            latch.await(5, TimeUnit.SECONDS)
+        } catch (e: InterruptedException) {
+            logger.error("Get call stack timeout", e)
+        }
+
+        logger.info("Retrieved ${frames.size} stack frames")
+
+        return GetCallStackResponse(
+            success = true,
+            frames = frames
+        )
     }
 
     /**

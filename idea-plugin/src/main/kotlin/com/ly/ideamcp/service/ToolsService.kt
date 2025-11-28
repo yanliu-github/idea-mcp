@@ -167,16 +167,20 @@ class ToolsService(private val project: Project) {
         logger.info("Applying quick fix '${request.fixId}' in file: ${request.filePath}")
 
         try {
-            val psiFile = ThreadHelper.runReadAction {
-                PsiHelper.findPsiFile(project, request.filePath)
-                    ?: throw IllegalArgumentException("File not found: ${request.filePath}")
-            }
+            // Phase 1: ReadAction - 收集数据和查找匹配的 Intention
+            data class PreparedData(
+                val offset: Int,
+                val matchingIntentionText: String?
+            )
 
-            // 确定要检查的位置
-            val offset = when {
-                request.offset != null -> request.offset
-                request.line != null -> {
-                    ThreadHelper.runReadAction {
+            val preparedData = ThreadHelper.runReadAction {
+                val psiFile = PsiHelper.findPsiFile(project, request.filePath)
+                    ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+
+                // 确定要检查的位置
+                val offset = when {
+                    request.offset != null -> request.offset
+                    request.line != null -> {
                         val document = com.intellij.psi.PsiDocumentManager.getInstance(project).getDocument(psiFile)
                             ?: throw IllegalArgumentException("Cannot get document for file: ${request.filePath}")
 
@@ -189,12 +193,9 @@ class ToolsService(private val project: Project) {
                         val column = request.column?.let { (it - 1).coerceAtLeast(0) } ?: 0
                         lineStart + column
                     }
+                    else -> 0
                 }
-                else -> 0
-            }
 
-            // 查找并应用快速修复
-            val applied = ThreadHelper.runReadAction {
                 val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
                     .selectedTextEditor
                     ?: createTemporaryEditor(psiFile)
@@ -221,14 +222,48 @@ class ToolsService(private val project: Project) {
                     )
                 }
 
-                if (matchingIntention != null) {
-                    // 应用快速修复
-                    ThreadHelper.runWriteAction {
-                        matchingIntention.invoke(project, editor, psiFile)
+                PreparedData(offset, matchingIntention?.text)
+            }
+
+            if (preparedData.matchingIntentionText == null) {
+                logger.warn("Quick fix '${request.fixId}' not found at offset ${preparedData.offset} in file: ${request.filePath}")
+                return QuickFixResponse(
+                    success = false,
+                    filePath = request.filePath,
+                    fixApplied = ""
+                )
+            }
+
+            // Phase 2: WriteAction - 应用快速修复（在 WriteAction 中重新查找并应用）
+            val applied = ThreadHelper.runWriteAction {
+                val psiFile = PsiHelper.findPsiFile(project, request.filePath)!!
+
+                val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+                    .selectedTextEditor
+                    ?: createTemporaryEditor(psiFile)
+
+                // 移动光标到指定位置
+                editor.caretModel.moveToOffset(preparedData.offset)
+
+                // 获取指定位置的所有可用快速修复
+                val intentionManager = com.intellij.codeInsight.intention.IntentionManager.getInstance()
+                val availableIntentions = intentionManager.availableIntentions
+
+                // 重新查找匹配的快速修复（在 WriteAction 上下文中）
+                val matchingIntention = availableIntentions.firstOrNull { intention ->
+                    val isAvailable = try {
+                        intention.isAvailable(project, editor, psiFile)
+                    } catch (e: Exception) {
+                        false
                     }
+
+                    isAvailable && intention.text == preparedData.matchingIntentionText
+                }
+
+                if (matchingIntention != null) {
+                    matchingIntention.invoke(project, editor, psiFile)
                     true
                 } else {
-                    logger.warn("Quick fix '${request.fixId}' not found at offset $offset in file: ${request.filePath}")
                     false
                 }
             }
@@ -277,16 +312,20 @@ class ToolsService(private val project: Project) {
         logger.info("Applying intention '${request.intentionId}' in file: ${request.filePath}")
 
         try {
-            val psiFile = ThreadHelper.runReadAction {
-                PsiHelper.findPsiFile(project, request.filePath)
-                    ?: throw IllegalArgumentException("File not found: ${request.filePath}")
-            }
+            // Phase 1: ReadAction - 收集数据和查找匹配的 Intention
+            data class PreparedData(
+                val offset: Int,
+                val matchingIntentionText: String?
+            )
 
-            // 确定要检查的位置
-            val offset = when {
-                request.offset != null -> request.offset
-                request.line != null -> {
-                    ThreadHelper.runReadAction {
+            val preparedData = ThreadHelper.runReadAction {
+                val psiFile = PsiHelper.findPsiFile(project, request.filePath)
+                    ?: throw IllegalArgumentException("File not found: ${request.filePath}")
+
+                // 确定要检查的位置
+                val offset = when {
+                    request.offset != null -> request.offset
+                    request.line != null -> {
                         val document = com.intellij.psi.PsiDocumentManager.getInstance(project).getDocument(psiFile)
                             ?: throw IllegalArgumentException("Cannot get document for file: ${request.filePath}")
 
@@ -299,12 +338,9 @@ class ToolsService(private val project: Project) {
                         val column = request.column?.let { (it - 1).coerceAtLeast(0) } ?: 0
                         lineStart + column
                     }
+                    else -> 0
                 }
-                else -> 0
-            }
 
-            // 查找并应用 Intention
-            val applied = ThreadHelper.runReadAction {
                 val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
                     .selectedTextEditor
                     ?: createTemporaryEditor(psiFile)
@@ -334,19 +370,53 @@ class ToolsService(private val project: Project) {
                     )
                 }
 
-                if (matchingIntention != null) {
-                    // 应用 Intention
-                    ThreadHelper.runWriteAction {
-                        try {
-                            matchingIntention.invoke(project, editor, psiFile)
-                        } catch (e: Exception) {
-                            logger.error("Error invoking intention: ${matchingIntention.text}", e)
-                            throw e
-                        }
+                PreparedData(offset, matchingIntention?.text)
+            }
+
+            if (preparedData.matchingIntentionText == null) {
+                logger.warn("Intention '${request.intentionId}' not found or not available at offset ${preparedData.offset} in file: ${request.filePath}")
+                return IntentionResponse(
+                    success = false,
+                    filePath = request.filePath,
+                    intentionApplied = ""
+                )
+            }
+
+            // Phase 2: WriteAction - 应用 Intention（在 WriteAction 中重新查找并应用）
+            val applied = ThreadHelper.runWriteAction {
+                val psiFile = PsiHelper.findPsiFile(project, request.filePath)!!
+
+                val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
+                    .selectedTextEditor
+                    ?: createTemporaryEditor(psiFile)
+
+                // 移动光标到指定位置
+                editor.caretModel.moveToOffset(preparedData.offset)
+
+                // 获取所有可用的 Intention Actions
+                val intentionManager = com.intellij.codeInsight.intention.IntentionManager.getInstance()
+                val availableIntentions = intentionManager.availableIntentions
+
+                // 重新查找匹配的 Intention（在 WriteAction 上下文中）
+                val matchingIntention = availableIntentions.firstOrNull { intention ->
+                    val isAvailable = try {
+                        intention.isAvailable(project, editor, psiFile)
+                    } catch (e: Exception) {
+                        false
                     }
-                    true
+
+                    isAvailable && intention.text == preparedData.matchingIntentionText
+                }
+
+                if (matchingIntention != null) {
+                    try {
+                        matchingIntention.invoke(project, editor, psiFile)
+                        true
+                    } catch (e: Exception) {
+                        logger.error("Error invoking intention: ${matchingIntention.text}", e)
+                        false
+                    }
                 } else {
-                    logger.warn("Intention '${request.intentionId}' not found or not available at offset $offset in file: ${request.filePath}")
                     false
                 }
             }
